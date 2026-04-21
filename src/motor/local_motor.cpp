@@ -1,0 +1,630 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2024-2026 Alex Conesa
+// See LICENSE file for details.
+
+#include "local_motor.h"
+
+#include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/portmacro.h>
+#include <time/time_control.h>
+#include <cassert>
+
+namespace motor {
+
+    // Spinlock protecting shared mutable state between the service timer
+    // (esp_timer task) and caller context (motion commands from any task).
+    // Protects: moveTarget_, hasTarget_, decelerating_, pendingProfile_,
+    // hasPendingProfile_. Keep critical sections short — no blocking calls.
+    static portMUX_TYPE g_motorMux = portMUX_INITIALIZER_UNLOCKED;
+
+    // ---- Internal service timer trampoline ----
+    // Runs in esp_timer task context (not ISR), safe for FSM and callbacks.
+
+    void LocalMotor::onServiceTimer(void* arg) {
+        static_cast<LocalMotor*>(arg)->handleServiceTimer();
+    }
+
+    // ============================================================
+    // Wiring
+    // ============================================================
+
+    void LocalMotor::setDriver(IMotorDriver& driver) {
+        driver_ = &driver;
+    }
+
+    void LocalMotor::addLimitBackward(uint8_t pin) {
+        if (backwardLimitCount_ < limit::MAX_PER_DIRECTION) {
+            limitsBackward_[backwardLimitCount_].configure(pin);
+            backwardLimitCount_++;
+        }
+    }
+
+    void LocalMotor::addLimitForward(uint8_t pin) {
+        if (forwardLimitCount_ < limit::MAX_PER_DIRECTION) {
+            limitsForward_[forwardLimitCount_].configure(pin);
+            forwardLimitCount_++;
+        }
+    }
+
+    bool LocalMotor::subscribe(IMotorEventListener* listener) {
+        return eventPublisher_.subscribe(listener);
+    }
+
+    bool LocalMotor::unsubscribe(IMotorEventListener* listener) {
+        return eventPublisher_.unsubscribe(listener);
+    }
+
+    // ============================================================
+    // Configuration
+    // ============================================================
+
+    void LocalMotor::setAutoStopOnStall(bool enabled) {
+        autoStopOnStall_ = enabled;
+    }
+
+    void LocalMotor::setMicrosteps(uint16_t microsteps) {
+        if (driver_ != nullptr) {
+            driver_->setMicrosteps(microsteps);
+        }
+    }
+
+    void LocalMotor::setRunCurrent(uint16_t milliAmps) {
+        if (driver_ != nullptr) {
+            driver_->setRunCurrent(milliAmps);
+        }
+    }
+
+    void LocalMotor::setCurrentCurve(const CurrentCurve& curve) {
+        currentCurve_ = curve;
+    }
+
+    void LocalMotor::setCurrentCurveEnabled(bool enabled) {
+        currentCurveEnabled_ = enabled;
+    }
+
+    void LocalMotor::setStepsPerMm(float stepsPerMm) {
+        stepsPerMm_ = stepsPerMm;
+    }
+
+    void LocalMotor::setStepsPerDegree(float stepsPerDeg) {
+        stepsPerDeg_ = stepsPerDeg;
+    }
+
+    void LocalMotor::setProfileSpeed(MotionProfile profile, int32_t speedSps) {
+        profiles_[static_cast<uint8_t>(profile)].speedSps = speedSps;
+    }
+
+    void LocalMotor::setProfileSpeed(MotionProfile profile, SpeedValue speed) {
+        profiles_[static_cast<uint8_t>(profile)].speedSps = convertToSps(speed);
+    }
+
+    void LocalMotor::setProfileAccel(MotionProfile profile, uint32_t accelMs) {
+        profiles_[static_cast<uint8_t>(profile)].accelTimeMs = accelMs;
+    }
+
+    void LocalMotor::setProfileDecel(MotionProfile profile, uint32_t decelMs) {
+        profiles_[static_cast<uint8_t>(profile)].decelTimeMs = decelMs;
+    }
+
+    void LocalMotor::setActiveProfile(MotionProfile profile) {
+        activeProfile_ = profile;
+    }
+
+    // ============================================================
+    // Lifecycle
+    // ============================================================
+
+    bool LocalMotor::begin() {
+        assert(driver_ != nullptr);
+
+        // Initialize motor driver — configures GPIO pins and register defaults
+        driver_->begin();
+
+        // Step generator — creates timer and configures step pin
+        if (!stepper_.begin(driver_->stepPin())) {
+            return false;
+        }
+
+        // Wire FSM to event publisher and position source for event stamping
+        fsm_.setPublisher(&eventPublisher_);
+        fsm_.setPositionSource(&cachedPosition_);
+
+        // Internal service timer — periodic 10 ms callback for safety monitoring.
+        // Runs in esp_timer task context (not ISR), so FSM transitions and
+        // callbacks are safe. Replaces the external service() call entirely.
+        esp_timer_create_args_t timerArgs = {};
+        timerArgs.callback = &LocalMotor::onServiceTimer;
+        timerArgs.arg = this;
+        timerArgs.name = "motor_svc";
+        timerArgs.dispatch_method = ESP_TIMER_TASK;
+
+        esp_timer_handle_t svcTimer = nullptr;
+        if (esp_timer_create(&timerArgs, &svcTimer) != ESP_OK) {
+            return false;
+        }
+        serviceTimer_ = svcTimer;
+
+        if (esp_timer_start_periodic(svcTimer, svc::MOTOR_SERVICE_US) != ESP_OK) {
+            esp_timer_delete(svcTimer);
+            serviceTimer_ = nullptr;
+            return false;
+        }
+
+        return true;
+    }
+
+    void LocalMotor::end() {
+        // Stop service timer
+        if (serviceTimer_ != nullptr) {
+            esp_timer_handle_t svcTimer = static_cast<esp_timer_handle_t>(serviceTimer_);
+            esp_timer_stop(svcTimer);
+            esp_timer_delete(svcTimer);
+            serviceTimer_ = nullptr;
+        }
+
+        // Stop step generator timers
+        stepper_.end();
+    }
+
+    // ============================================================
+    // IMotor — enable / disable
+    // ============================================================
+
+    void LocalMotor::enable() {
+        if (fsm_.state() != MotorFsmState::Disabled) {
+            return;
+        }
+        driver_->enable();
+        fsm_.requestEnable();
+    }
+
+    void LocalMotor::disable() {
+        stepper_.hardStop();
+        portENTER_CRITICAL(&g_motorMux);
+        hasTarget_ = false;
+        hasPendingProfile_ = false;
+        decelerating_ = false;
+        portEXIT_CRITICAL(&g_motorMux);
+        driver_->disable();
+        fsm_.requestDisable();
+    }
+
+    // ============================================================
+    // IMotor — motion commands
+    // ============================================================
+
+    void LocalMotor::moveForward() {
+        if (fsm_.state() != MotorFsmState::Idle) {
+            return;
+        }
+        direction_ = Direction::FORWARD;
+        applyDirection();
+        stepper_.clearTargetPosition();  // Continuous — no ISR target
+        auto& profile = profiles_[static_cast<uint8_t>(activeProfile_)];
+        startMotion(profile.speedSps, profile.accelTimeMs, profile.decelTimeMs);
+        fsm_.requestMoveForward();
+        fsm_.requestRunning(Direction::FORWARD);
+    }
+
+    void LocalMotor::moveBackward() {
+        if (fsm_.state() != MotorFsmState::Idle) {
+            return;
+        }
+        direction_ = Direction::BACKWARD;
+        applyDirection();
+        stepper_.clearTargetPosition();  // Continuous — no ISR target
+        auto& profile = profiles_[static_cast<uint8_t>(activeProfile_)];
+        startMotion(profile.speedSps, profile.accelTimeMs, profile.decelTimeMs);
+        fsm_.requestMoveBackward();
+        fsm_.requestRunning(Direction::BACKWARD);
+    }
+
+    void LocalMotor::moveTo(float target, DistanceUnit unit) {
+        moveToAbsolute(convertToSteps(target, unit));
+    }
+
+    void LocalMotor::moveToAbsolute(int32_t absoluteTarget) {
+        if (fsm_.state() != MotorFsmState::Idle) {
+            return;
+        }
+        int32_t currentPos = stepper_.position();
+        if (absoluteTarget == currentPos) {
+            return;
+        }
+
+        portENTER_CRITICAL(&g_motorMux);
+        moveTarget_ = absoluteTarget;
+        hasTarget_ = true;
+        decelerating_ = false;
+        portEXIT_CRITICAL(&g_motorMux);
+
+        Direction dir = (absoluteTarget > currentPos) ? Direction::FORWARD : Direction::BACKWARD;
+        direction_ = dir;
+        applyDirection();
+
+        // Set ISR-level target for single-step precision stop.
+        // The step ISR checks position on every step and stops immediately
+        // when the target is reached — zero overshoot.
+        stepper_.setTargetPosition(absoluteTarget);
+
+        auto& profile = profiles_[static_cast<uint8_t>(activeProfile_)];
+        startMotion(profile.speedSps, profile.accelTimeMs, profile.decelTimeMs);
+        fsm_.requestStarting();
+        fsm_.requestRunning(dir);
+    }
+
+    void LocalMotor::moveBy(float delta, DistanceUnit unit) {
+        int32_t deltaSteps = convertToSteps(delta, unit);
+        if (deltaSteps == 0) {
+            return;
+        }
+        int32_t currentPos = stepper_.position();
+        moveToAbsolute(currentPos + deltaSteps);
+    }
+
+    void LocalMotor::executeProfile(const MotionProfileSpec& profile) {
+        if (fsm_.state() != MotorFsmState::Idle) {
+            return;
+        }
+
+        portENTER_CRITICAL(&g_motorMux);
+        pendingProfile_ = profile;
+        hasPendingProfile_ = true;
+        portEXIT_CRITICAL(&g_motorMux);
+
+        uint32_t nowMs = ungula::TimeControl::syncNow();
+        if (profile.startTimeMs == 0 || profile.startTimeMs <= nowMs) {
+            servicePendingProfile(nowMs);
+        } else {
+            fsm_.requestWaitStart();
+        }
+    }
+
+    void LocalMotor::updateSpeed(int32_t speedSps, uint32_t accelMs, uint32_t decelMs) {
+        if (!fsm_.isMoving()) {
+            return;
+        }
+        driver_->updateStallDetectionSpeed(speedSps);
+        applyCurrentForSpeed(speedSps);
+        stepper_.setSpeed(speedSps, accelMs, decelMs);
+    }
+
+    void LocalMotor::updateSpeed(SpeedValue speed, uint32_t accelMs, uint32_t decelMs) {
+        updateSpeed(convertToSps(speed), accelMs, decelMs);
+    }
+
+    void LocalMotor::stop() {
+        stepper_.stop();
+        fsm_.requestDecelerate();
+    }
+
+    void LocalMotor::emergencyStop() {
+        stepper_.hardStop();
+        stepper_.clearTargetPosition();
+        portENTER_CRITICAL(&g_motorMux);
+        hasTarget_ = false;
+        hasPendingProfile_ = false;
+        decelerating_ = false;
+        portEXIT_CRITICAL(&g_motorMux);
+        fsm_.requestEmergencyStop();
+    }
+
+    // ============================================================
+    // IMotor — state queries
+    // ============================================================
+
+    MotorFsmState LocalMotor::state() const {
+        return fsm_.state();
+    }
+
+    int32_t LocalMotor::positionSteps() const {
+        return stepper_.position();
+    }
+
+    bool LocalMotor::isMoving() const {
+        return fsm_.isMoving();
+    }
+
+    // ============================================================
+    // Position
+    // ============================================================
+
+    void LocalMotor::resetPosition() {
+        if (fsm_.isMoving()) {
+            return;
+        }
+        stepper_.resetPosition();
+    }
+
+    // ============================================================
+    // Fault acknowledgement
+    // ============================================================
+
+    void LocalMotor::clearStall() {
+        driver_->clearStall();
+        fsm_.clearStall();
+    }
+
+    void LocalMotor::clearFault() {
+        fsm_.clearFault();
+    }
+
+    // ============================================================
+    // Internal service timer (runs every ~10 ms via esp_timer)
+    // ============================================================
+    //
+    // This replaces the old public service() method. It runs autonomously
+    // in the esp_timer task, independent of the main application loop.
+    // Handles: limit switches, stall detection, target position management,
+    // auto-stop detection, and FSM terminal state transitions.
+
+    void LocalMotor::handleServiceTimer() {
+        // Snapshot position for FSM event stamping and service logic
+        cachedPosition_ = stepper_.position();
+
+        // Update limit switches (debounce polling)
+        uint32_t nowMs = ungula::TimeControl::syncNow();
+        for (int32_t idx = 0; idx < backwardLimitCount_; idx++) {
+            limitsBackward_[idx].update(nowMs);
+        }
+        for (int32_t idx = 0; idx < forwardLimitCount_; idx++) {
+            limitsForward_[idx].update(nowMs);
+        }
+
+        MotorFsmState currentState = fsm_.state();
+
+        // Snapshot shared flags under lock — callers may write from another context
+        portENTER_CRITICAL(&g_motorMux);
+        bool snapHasPending = hasPendingProfile_;
+        bool snapDecelerating = decelerating_;
+        portEXIT_CRITICAL(&g_motorMux);
+
+        // Handle pending profile start time
+        if (snapHasPending && currentState == MotorFsmState::WaitingStart) {
+            servicePendingProfile(nowMs);
+        }
+
+        // Stall detection — delegated to driver. The driver handles pin reading,
+        // register polling, blanking, and scoring. We only ask for the verdict.
+        if (fsm_.isMoving() && driver_ != nullptr && !snapDecelerating) {
+            driver_->serviceStallDetection();
+        }
+
+        // Safety checks during motion
+        if (fsm_.isMoving()) {
+            // Stall check — driver's verdict
+            if (driver_ != nullptr && driver_->isStalling()) {
+                handleStall();
+                return;
+            }
+            // Limit switch detection
+            if (isLimitHitInDirection()) {
+                stepper_.hardStop();
+                portENTER_CRITICAL(&g_motorMux);
+                hasTarget_ = false;
+                portEXIT_CRITICAL(&g_motorMux);
+                fsm_.requestLimitHit();
+                return;
+            }
+            // Target position check + deceleration
+            serviceMoving();
+        }
+
+        // Detect ISR-level target reached (single-step precision)
+        if (stepper_.consumeTargetReached() && fsm_.isMoving()) {
+            portENTER_CRITICAL(&g_motorMux);
+            hasTarget_ = false;
+            decelerating_ = false;
+            portEXIT_CRITICAL(&g_motorMux);
+            fsm_.requestTargetReached();
+        }
+
+        // Detect stepper auto-stop (ramp reached zero inside ISR)
+        if (stepper_.consumeAutoStop() && fsm_.isMoving()) {
+            portENTER_CRITICAL(&g_motorMux);
+            hasTarget_ = false;
+            decelerating_ = false;
+            portEXIT_CRITICAL(&g_motorMux);
+            fsm_.requestStop();
+        }
+
+        // Auto-transition terminal states back to Idle
+        MotorFsmState afterState = fsm_.state();
+        if (afterState == MotorFsmState::TargetReached ||
+            afterState == MotorFsmState::LimitReached || afterState == MotorFsmState::Stopped) {
+            fsm_.requestStop();
+        }
+    }
+
+    // ============================================================
+    // Diagnostics
+    // ============================================================
+
+    float LocalMotor::currentSpeed() const {
+        return stepper_.currentSpeed();
+    }
+
+    // ============================================================
+    // Internal helpers
+    // ============================================================
+
+    void LocalMotor::applyDirection() {
+        stepper_.setDirectionForward(direction_ == Direction::FORWARD);
+        driver_->setDirection(direction_);
+    }
+
+    bool LocalMotor::isBackwardLimitHit() const {
+        for (int32_t idx = 0; idx < backwardLimitCount_; idx++) {
+            if (limitsBackward_[idx].isTriggered()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool LocalMotor::isForwardLimitHit() const {
+        for (int32_t idx = 0; idx < forwardLimitCount_; idx++) {
+            if (limitsForward_[idx].isTriggered()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool LocalMotor::isLimitHitInDirection() const {
+        if (direction_ == Direction::BACKWARD) {
+            return isBackwardLimitHit();
+        }
+        return isForwardLimitHit();
+    }
+
+    void LocalMotor::handleStall() {
+        if (autoStopOnStall_) {
+            stepper_.hardStop();
+            portENTER_CRITICAL(&g_motorMux);
+            hasTarget_ = false;
+            portEXIT_CRITICAL(&g_motorMux);
+        }
+        fsm_.requestStallDetected();
+    }
+
+    void LocalMotor::serviceMoving() {
+        // Snapshot shared state under lock
+        portENTER_CRITICAL(&g_motorMux);
+        bool snapHasTarget = hasTarget_;
+        int32_t snapMoveTarget = moveTarget_;
+        bool snapDecelerating = decelerating_;
+        portEXIT_CRITICAL(&g_motorMux);
+
+        if (!snapHasTarget) {
+            return;
+        }
+
+        int32_t pos = cachedPosition_;
+        int32_t remaining = (direction_ == Direction::FORWARD) ? (snapMoveTarget - pos)
+                                                               : (pos - snapMoveTarget);
+
+        // Hard limit — if we overshot, stop immediately
+        if (remaining <= 0) {
+            stepper_.hardStop();
+            portENTER_CRITICAL(&g_motorMux);
+            hasTarget_ = false;
+            decelerating_ = false;
+            portEXIT_CRITICAL(&g_motorMux);
+            fsm_.requestTargetReached();
+            return;
+        }
+
+        // Deceleration distance: d = v^2 / (2 * a)
+        // Standard kinematics — how many steps it takes to ramp from current
+        // speed down to zero at the configured deceleration rate.
+        // When decelRate is 0 (instant stop), decelSteps is 0 — stop immediately at target.
+        if (!snapDecelerating) {
+            float currentSps = stepper_.currentSpeed();
+            float decelRate = stepper_.decelerationRate();
+            int32_t decelSteps = 0;
+            if (decelRate > 0.0F) {
+                decelSteps = static_cast<int32_t>((currentSps * currentSps) / (2.0F * decelRate));
+            }
+
+            if (remaining <= decelSteps) {
+                stepper_.stop();  // Soft stop — ramp to zero
+                fsm_.requestDecelerate();
+                portENTER_CRITICAL(&g_motorMux);
+                decelerating_ = true;
+                portEXIT_CRITICAL(&g_motorMux);
+            }
+        }
+    }
+
+    void LocalMotor::servicePendingProfile(uint32_t nowMs) {
+        // Snapshot profile under lock — caller may write from another context
+        portENTER_CRITICAL(&g_motorMux);
+        if (!hasPendingProfile_) {
+            portEXIT_CRITICAL(&g_motorMux);
+            return;
+        }
+        MotionProfileSpec profile = pendingProfile_;
+        hasPendingProfile_ = false;
+        portEXIT_CRITICAL(&g_motorMux);
+
+        if (profile.startTimeMs != 0 && nowMs < profile.startTimeMs) {
+            // Not ready yet — put it back
+            portENTER_CRITICAL(&g_motorMux);
+            pendingProfile_ = profile;
+            hasPendingProfile_ = true;
+            portEXIT_CRITICAL(&g_motorMux);
+            return;
+        }
+
+        int32_t currentPos = cachedPosition_;
+        if (profile.targetPosition > currentPos) {
+            direction_ = Direction::FORWARD;
+        } else {
+            direction_ = Direction::BACKWARD;
+        }
+        applyDirection();
+
+        portENTER_CRITICAL(&g_motorMux);
+        moveTarget_ = profile.targetPosition;
+        hasTarget_ = true;
+        portEXIT_CRITICAL(&g_motorMux);
+
+        startMotion(profile.maxVelocitySps, 0, 0);
+
+        fsm_.requestStarting();
+        fsm_.requestRunning(direction_);
+    }
+
+    void LocalMotor::startMotion(int32_t speedSps, uint32_t accelMs, uint32_t decelMs) {
+        decelerating_ = false;
+
+        // Tell the driver to prepare stall detection for this motion
+        driver_->prepareStallDetection(speedSps, accelMs);
+
+        // Speed-proportional current (opt-in). No-op unless the user configured
+        // a curve and turned it on. Runs before stepper_.start() so the first
+        // step pulses already carry the right current.
+        applyCurrentForSpeed(speedSps);
+
+        stepper_.setSpeed(speedSps, accelMs, decelMs);
+        stepper_.start();
+    }
+
+    void LocalMotor::applyCurrentForSpeed(int32_t speedSps) {
+        if (!currentCurveEnabled_ || driver_ == nullptr) {
+            return;
+        }
+        driver_->setRunCurrent(currentMaForSps(currentCurve_, speedSps));
+    }
+
+    int32_t LocalMotor::convertToSps(SpeedValue speed) const {
+        switch (speed.unit) {
+            case SpeedUnit::STEPS_PER_SEC:
+                return static_cast<int32_t>(speed.value);
+            case SpeedUnit::MM_PER_SEC:
+                return static_cast<int32_t>(speed.value * stepsPerMm_);
+            case SpeedUnit::CM_PER_SEC:
+                return static_cast<int32_t>(speed.value * CM_TO_MM * stepsPerMm_);
+            case SpeedUnit::DEGREES_PER_SEC:
+                return static_cast<int32_t>(speed.value * stepsPerDeg_);
+        }
+        return static_cast<int32_t>(speed.value);
+    }
+
+    int32_t LocalMotor::convertToSteps(float value, DistanceUnit unit) const {
+        switch (unit) {
+            case DistanceUnit::STEPS:
+                return static_cast<int32_t>(value);
+            case DistanceUnit::MM:
+                return static_cast<int32_t>(value * stepsPerMm_);
+            case DistanceUnit::CM:
+                return static_cast<int32_t>(value * CM_TO_MM * stepsPerMm_);
+            case DistanceUnit::DEGREES:
+                return static_cast<int32_t>(value * stepsPerDeg_);
+        }
+        return static_cast<int32_t>(value);
+    }
+
+}  // namespace motor

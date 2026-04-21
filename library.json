@@ -1,0 +1,23 @@
+{
+  "name": "UngulaMotor",
+  "description": "Stepper motor control for ESP32 — autonomous motion with FSM, stall detection, and event system",
+  "keywords": "motor, stepper, tmc2209, motion, stall, fsm, driver",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Alex Conesa",
+      "url": "https://github.com/alexconesap"
+    }
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alexconesap/ungula-motor.git"
+  },
+  "version": "2.0.0",
+  "frameworks": ["arduino", "espidf", "*"],
+  "platforms": ["espressif32"],
+  "headers": "ungula_motor_lib.h",
+  "build": {
+    "libArchive": false
+  }
+}
