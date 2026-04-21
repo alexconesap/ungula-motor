@@ -325,7 +325,7 @@ while (home_x_runner.isRunning() || home_y_runner.isRunning()) {
 
 ```text
 src/
-  ungula_motor_lib.h            Aggregator header (Arduino discovery)
+  ungula_motor.h            Aggregator header (Arduino discovery)
   motor/                        Main motor system (motor:: namespace)
     motor_types.h               Enums, constants, value types
     motor_state.h               FSM state enum and names

@@ -15,7 +15,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(googletest)
 
 # ---------------------------------------------------------------------------
-# Dependencies: ungula-lib (headers for TimeControl, GpioAccess) and emblogx
+# Dependencies: UngulaCore (headers for TimeControl, GpioAccess) and EmblogX
 # (tmc_stepper.cpp uses log_error via <emblogx/logger.h>).
 #
 # By default we use sibling directories (../../lib, ../../lib_emblogx) which
@@ -29,12 +29,12 @@ if(USE_LOCAL_DEPS)
     set(LIB_EMBLOGX_SRC ${CMAKE_CURRENT_LIST_DIR}/../../lib_emblogx/src)
 else()
     FetchContent_Declare(
-        ungula_lib
+        ungula_core
         GIT_REPOSITORY https://github.com/alexconesap/ungula-core.git
         GIT_TAG main
     )
-    FetchContent_MakeAvailable(ungula_lib)
-    set(LIB_SRC ${ungula_lib_SOURCE_DIR}/src)
+    FetchContent_MakeAvailable(ungula_core)
+    set(LIB_SRC ${ungula_core_SOURCE_DIR}/src)
 
     FetchContent_Declare(
         emblogx
@@ -82,7 +82,7 @@ target_link_libraries(test_ungula_motor gtest_main)
 # only on IHomeableMotor, so MockHomeableMotor gives us full coverage of
 # stall/limit-switch logic without esp_timer, gptimer or a real driver.
 #
-# The HomingRunner source pulls in <time/time_control.h> from ungula-lib.
+# The HomingRunner source pulls in <time/time_control.h> from UngulaCore.
 # We already add LIB_SRC to the include paths above, so it resolves.
 # ---------------------------------------------------------------------------
 add_executable(test_ungula_motor_homing
