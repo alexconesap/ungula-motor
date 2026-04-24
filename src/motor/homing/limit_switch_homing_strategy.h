@@ -52,6 +52,10 @@ namespace motor {
                 return succeeded_;
             }
 
+            /// @brief A limit-switch strategy can answer "am I at home?"
+            /// just by reading the pin — no motion needed.
+            bool isAtHomeReference(const IHomeableMotor& motor) const override;
+
         private:
             enum class Phase : uint8_t {
                 FastApproach,  // drive into the switch at full speed.

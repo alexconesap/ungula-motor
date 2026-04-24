@@ -27,6 +27,13 @@ namespace motor {
                 pin_ = pin;
                 inverted_ = invertPolarity;
                 ungula::gpio::configInput(pin_);
+                // Snap the initial reading as stable. No bounce to worry about
+                // at setup time, and without this isTriggered() lies until the
+                // first full debounce window elapses — breaks the boot-time
+                // isAtHomeReference() check.
+                const bool rawNow = ungula::gpio::isHigh(pin_);
+                stable_ = rawNow;
+                lastRaw_ = rawNow;
             }
 
             /// @brief Update debounce filter. Call every service tick (~10 ms).

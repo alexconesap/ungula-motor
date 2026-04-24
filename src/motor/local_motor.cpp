@@ -47,6 +47,14 @@ namespace motor {
         }
     }
 
+    void LocalMotor::setHomingStrategy(IHomingStrategy* strategy) {
+        homingStrategy_ = strategy;
+    }
+
+    void LocalMotor::setHomingTimeout(uint32_t timeoutMs) {
+        homingTimeoutMs_ = timeoutMs;
+    }
+
     bool LocalMotor::subscribe(IMotorEventListener* listener) {
         return eventPublisher_.subscribe(listener);
     }
@@ -151,6 +159,14 @@ namespace motor {
             return false;
         }
 
+        // Seed isHomed_ from the configured strategy. For limit-switch
+        // homing, this means "if the axis happens to be sitting on the
+        // switch after a reboot, we already know we're at home". Stall
+        // strategies have no such signal and always return false.
+        if (homingStrategy_ != nullptr) {
+            isHomed_ = homingStrategy_->isAtHomeReference(*this);
+        }
+
         return true;
     }
 
@@ -180,6 +196,7 @@ namespace motor {
     }
 
     void LocalMotor::disable() {
+        abortHomingIfRunning();
         stepper_.hardStop();
         portENTER_CRITICAL(&g_motorMux);
         hasTarget_ = false;
@@ -198,6 +215,7 @@ namespace motor {
         if (fsm_.state() != MotorFsmState::Idle) {
             return;
         }
+        invalidateHomedIfUserMotion();
         direction_ = Direction::FORWARD;
         applyDirection();
         stepper_.clearTargetPosition();  // Continuous — no ISR target
@@ -211,6 +229,7 @@ namespace motor {
         if (fsm_.state() != MotorFsmState::Idle) {
             return;
         }
+        invalidateHomedIfUserMotion();
         direction_ = Direction::BACKWARD;
         applyDirection();
         stepper_.clearTargetPosition();  // Continuous — no ISR target
@@ -232,6 +251,8 @@ namespace motor {
         if (absoluteTarget == currentPos) {
             return;
         }
+
+        invalidateHomedIfUserMotion();
 
         portENTER_CRITICAL(&g_motorMux);
         moveTarget_ = absoluteTarget;
@@ -268,6 +289,8 @@ namespace motor {
             return;
         }
 
+        invalidateHomedIfUserMotion();
+
         portENTER_CRITICAL(&g_motorMux);
         pendingProfile_ = profile;
         hasPendingProfile_ = true;
@@ -295,11 +318,15 @@ namespace motor {
     }
 
     void LocalMotor::stop() {
+        // A soft stop still counts as "stop homing" — the strategy can't
+        // make progress if we're ramping to zero.
+        abortHomingIfRunning();
         stepper_.stop();
         fsm_.requestDecelerate();
     }
 
     void LocalMotor::emergencyStop() {
+        abortHomingIfRunning();
         stepper_.hardStop();
         stepper_.clearTargetPosition();
         portENTER_CRITICAL(&g_motorMux);
@@ -326,6 +353,18 @@ namespace motor {
         return fsm_.isMoving();
     }
 
+    bool LocalMotor::wasLimitHit() const {
+        return wasLimitHit_;
+    }
+
+    bool LocalMotor::isHoming() const {
+        return homingPhase_ == HomingPhase::Running;
+    }
+
+    bool LocalMotor::isHomed() const {
+        return isHomed_;
+    }
+
     // ============================================================
     // Position
     // ============================================================
@@ -335,6 +374,89 @@ namespace motor {
             return;
         }
         stepper_.resetPosition();
+    }
+
+    bool LocalMotor::isLimitAtDirection(Direction dir) const {
+        return (dir == Direction::BACKWARD) ? isBackwardLimitHit() : isForwardLimitHit();
+    }
+
+    // ============================================================
+    // Homing (internal black-box)
+    // ============================================================
+
+    void LocalMotor::home() {
+        if (homingStrategy_ == nullptr) {
+            return;  // nothing configured — home() is a no-op
+        }
+        // Cancel whatever was happening. This also aborts a previous home()
+        // run cleanly (abortHomingIfRunning is called by emergencyStop).
+        emergencyStop();
+
+        isHomed_ = false;
+        homingPhase_ = HomingPhase::Running;
+        homingStartMs_ = ungula::TimeControl::syncNow();
+        // strategy.begin() will issue motion commands; mark them as
+        // "internal" so isHomed_ isn't immediately invalidated by them.
+        internalMotionFromHoming_ = true;
+        homingStrategy_->begin(*this);
+        internalMotionFromHoming_ = false;
+    }
+
+    void LocalMotor::abortHomingIfRunning() {
+        if (homingPhase_ != HomingPhase::Running) {
+            return;
+        }
+        // Re-entrancy guard. Strategies legally call motor.emergencyStop()
+        // as part of their normal phase transitions (LimitReached → backoff,
+        // TargetReached → slow re-approach). Those internal calls must NOT
+        // abort the homing run — only user-initiated stop/emergencyStop do.
+        if (internalMotionFromHoming_) {
+            return;
+        }
+        // Set phase FIRST. strategy.finish() calls motor.emergencyStop() if the
+        // motor is still moving, which re-enters this function — without the
+        // early-out above + early phase flip below, we'd stack-overflow.
+        homingPhase_ = HomingPhase::Failed;
+        if (homingStrategy_ != nullptr) {
+            internalMotionFromHoming_ = true;
+            homingStrategy_->finish(*this, false);
+            internalMotionFromHoming_ = false;
+        }
+    }
+
+    void LocalMotor::invalidateHomedIfUserMotion() {
+        if (!internalMotionFromHoming_) {
+            isHomed_ = false;
+        }
+    }
+
+    // Runs from handleServiceTimer — in-phase with FSM transitions so the
+    // strategy sees TargetReached before the service loop's auto-clear
+    // collapses it to Idle.
+    void LocalMotor::serviceHoming(uint32_t nowMs) {
+        if (homingPhase_ != HomingPhase::Running || homingStrategy_ == nullptr) {
+            return;
+        }
+        // Wall-clock guard (0 = disabled, strategy owns its own deadline).
+        if (homingTimeoutMs_ != 0U && (nowMs - homingStartMs_) >= homingTimeoutMs_) {
+            internalMotionFromHoming_ = true;
+            homingStrategy_->finish(*this, false);
+            internalMotionFromHoming_ = false;
+            homingPhase_ = HomingPhase::Failed;
+            return;
+        }
+
+        internalMotionFromHoming_ = true;
+        const bool done = homingStrategy_->tick(*this);
+        if (done) {
+            const bool ok = homingStrategy_->succeeded();
+            homingStrategy_->finish(*this, ok);
+            homingPhase_ = ok ? HomingPhase::Done : HomingPhase::Failed;
+            if (ok) {
+                isHomed_ = true;
+            }
+        }
+        internalMotionFromHoming_ = false;
     }
 
     // ============================================================
@@ -372,6 +494,14 @@ namespace motor {
             limitsForward_[idx].update(nowMs);
         }
 
+        // Sticky limit-hit flag clear condition: we're actively moving
+        // again AND every limit has released. This matches the spec —
+        // wasLimitHit() stays true from the stop until the axis has
+        // physically backed off the switch.
+        if (wasLimitHit_ && fsm_.isMoving() && !isBackwardLimitHit() && !isForwardLimitHit()) {
+            wasLimitHit_ = false;
+        }
+
         MotorFsmState currentState = fsm_.state();
 
         // Snapshot shared flags under lock — callers may write from another context
@@ -405,6 +535,12 @@ namespace motor {
                 hasTarget_ = false;
                 portEXIT_CRITICAL(&g_motorMux);
                 fsm_.requestLimitHit();
+                // Latch the sticky flag so the host can observe the stop
+                // after the FSM's auto-clear has returned us to Idle.
+                wasLimitHit_ = true;
+                // Drive the homing strategy before returning — it may want
+                // to act on this LimitReached event this very tick.
+                serviceHoming(nowMs);
                 return;
             }
             // Target position check + deceleration
@@ -428,6 +564,12 @@ namespace motor {
             portEXIT_CRITICAL(&g_motorMux);
             fsm_.requestStop();
         }
+
+        // Drive the homing strategy in-phase with the FSM transitions it
+        // watches for — specifically TargetReached, which the auto-clear
+        // below would otherwise collapse to Idle in the same tick before
+        // the strategy has a chance to react.
+        serviceHoming(nowMs);
 
         // Auto-transition terminal states back to Idle
         MotorFsmState afterState = fsm_.state();

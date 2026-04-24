@@ -49,6 +49,12 @@ namespace motor {
 
             /// @brief Zero the step counter (homing reference point).
             virtual void resetPosition() = 0;
+
+            /// @brief Is a limit switch in the given direction currently
+            /// asserted? Lets a homing strategy peek at the physical state
+            /// (e.g., limit-switch strategies use this for the boot-time
+            /// isAtHomeReference() check).
+            virtual bool isLimitAtDirection(Direction dir) const = 0;
     };
 
 }  // namespace motor

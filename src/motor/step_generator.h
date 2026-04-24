@@ -81,8 +81,13 @@ namespace motor {
                 return currentSps_;
             }
 
-            /// @brief Check if motor is running.
-            bool isRunning() const {
+            /// @brief True while the step timer is firing step pulses.
+            ///
+            /// This is the low-level "pulse train is active" flag — not the
+            /// high-level "motor is in a motion FSM state" answer. Use
+            /// IMotor::isMoving() for the latter. Renamed from isRunning()
+            /// (too easy to confuse with HomingRunner::isRunning()).
+            bool isPulsing() const {
                 return running_;
             }
 

@@ -51,6 +51,12 @@ namespace {
                 return succeeded_;
             }
 
+            bool isAtHomeReference(const IHomeableMotor& /*motor*/) const override {
+                return scriptedAtHome;
+            }
+
+            bool scriptedAtHome = false;
+
         private:
             bool succeeded_ = false;
     };

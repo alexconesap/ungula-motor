@@ -119,4 +119,19 @@ namespace {
         EXPECT_FALSE(mock.autoStopOnStall);
     }
 
+    // Boot-time seed: LocalMotor::begin() asks the strategy whether the axis
+    // is already sitting on the home reference. For limit-switch homing this
+    // is the configured direction's limit pin.
+    TEST(LimitSwitchHomingStrategyTest, IsAtHomeReferenceFollowsLimitInHomingDirection) {
+        MockHomeableMotor mock;
+        LimitSwitchHomingStrategy strategy(makeConfig());  // homingDirection = BACKWARD
+
+        mock.scriptedLimitBackward = false;
+        mock.scriptedLimitForward = true;  // the OTHER end — must not count.
+        EXPECT_FALSE(strategy.isAtHomeReference(mock));
+
+        mock.scriptedLimitBackward = true;
+        EXPECT_TRUE(strategy.isAtHomeReference(mock));
+    }
+
 }  // namespace

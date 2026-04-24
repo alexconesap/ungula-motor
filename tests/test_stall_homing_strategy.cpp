@@ -139,4 +139,17 @@ namespace {
         EXPECT_EQ(mock.profileWrites.front().speedSps, 2000);
     }
 
+    // Boot-time seed: a stall-based strategy has no "am I at home" signal at
+    // rest — the driver is "not stalling" whether the axis is on the stop or
+    // not. Must always report false so LocalMotor::begin() won't wrongly seed
+    // isHomed across a reboot.
+    TEST(StallHomingStrategyTest, IsAtHomeReferenceAlwaysFalse) {
+        MockHomeableMotor mock;
+        StallHomingStrategy strategy(makeConfig());
+
+        mock.scriptedLimitBackward = true;  // irrelevant for stall homing.
+        mock.scriptedLimitForward = true;
+        EXPECT_FALSE(strategy.isAtHomeReference(mock));
+    }
+
 }  // namespace

@@ -69,7 +69,6 @@ add_executable(test_ungula_motor
     test_stepper_controller.cpp
     test_motor_driver_interface.cpp
     test_current_curve.cpp
-    ArduinoStub/system_stub.cpp
     ${LIB_MOTOR_SRC}/basic_motor/stepper_controller.cpp
     ${LIB_EMBLOGX_SRC}/emblogx/logger_core.cpp
     ${LIB_EMBLOGX_SRC}/emblogx/async_dispatcher.cpp
@@ -89,7 +88,6 @@ add_executable(test_ungula_motor_homing
     test_stall_homing_strategy.cpp
     test_limit_switch_homing_strategy.cpp
     test_homing_runner.cpp
-    ArduinoStub/system_stub.cpp
     ${LIB_MOTOR_SRC}/motor/homing/stall_homing_strategy.cpp
     ${LIB_MOTOR_SRC}/motor/homing/limit_switch_homing_strategy.cpp
     ${LIB_MOTOR_SRC}/motor/homing/homing_runner.cpp

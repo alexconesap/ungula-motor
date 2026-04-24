@@ -49,6 +49,20 @@ namespace motor {
             int32_t positionSteps() const override;
             bool isMoving() const override;
 
+            // RemoteMotor is a proxy — the black-box status flags would
+            // need to ride in the cached state messages from the far end.
+            // For now, report conservative defaults. Wire these up when the
+            // protocol grows the needed fields.
+            bool wasLimitHit() const override {
+                return false;
+            }
+            bool isHoming() const override {
+                return false;
+            }
+            bool isHomed() const override {
+                return false;
+            }
+
             // ---- State updates (called by application message router) ----
 
             /// @brief Update cached state from a remote event.

@@ -53,8 +53,41 @@ namespace motor {
             /// @brief Current position in steps.
             virtual int32_t positionSteps() const = 0;
 
-            /// @brief True if motor is in any motion state.
+            /// @brief True if motor is in any motion state (Starting,
+            /// RunningForward, RunningBackward, Decelerating, WaitingStart).
+            /// Stable — callers can poll this safely from the main loop
+            /// without worrying about terminal FSM states that the service
+            /// timer auto-clears on every tick.
             virtual bool isMoving() const = 0;
+
+            // ---- Black-box status queries ----
+            //
+            // Stable flags that survive the transient FSM terminal states.
+            // Callers should not need to reason about TargetReached /
+            // LimitReached / Stall / Fault directly — these getters
+            // summarise the persistent "what happened" view.
+
+            /// @brief True if the motor last came to rest because a limit
+            /// switch fired. Remains true across the FSM's auto-clear back
+            /// to Idle. Cleared automatically when motion resumes *and*
+            /// every registered limit is no longer asserted — i.e., the
+            /// axis has physically backed off the switch.
+            virtual bool wasLimitHit() const = 0;
+
+            /// @brief True while an internal homing sequence is still
+            /// advancing. Goes false as soon as the sequence terminates for
+            /// any reason (success, failure, user stop, emergency stop,
+            /// watchdog expiry).
+            virtual bool isHoming() const = 0;
+
+            /// @brief True once a homing sequence has completed
+            /// successfully. Also seeded at begin() via the configured
+            /// homing strategy (limit-switch strategies can look at the
+            /// real limit pin and conclude "we're already at home"; stall
+            /// strategies have no such signal and start false). Cleared by
+            /// any subsequent motion command that is not itself the
+            /// internal homing.
+            virtual bool isHomed() const = 0;
     };
 
 }  // namespace motor

@@ -237,53 +237,18 @@ The motor calls `driver.setRunCurrent(mA)` on every commanded speed change (`mov
 
 ## Homing
 
-Homing is a multi-step dance (approach --> stop signal --> back off --> slow re-approach --> zero) and different machines use different stop signals: a mechanical hard stop read via stall detection, a limit switch, an optical sensor, an encoder index pulse. The library keeps homing out of `LocalMotor` and delegates it to an injectable strategy so the same motor can be homed different ways in different projects.
+Homing is a multi-step dance (approach → stop signal → back off → slow re-approach → zero) and different machines use different stop signals: a mechanical hard stop read via stall detection, a limit switch, an optical sensor, an encoder index pulse. The homing logic is **inside `LocalMotor`** — the application just installs a strategy at setup and calls `motor.home()`. No loop polling, no runner to tick.
 
-```text
-HomingRunner ──drives──> IHomingStrategy ──commands──> IHomeableMotor
-                              ^                              ^
-                              │                              │
-                     StallHomingStrategy               LocalMotor
-                     LimitSwitchHomingStrategy         (or mock for tests)
-```
+### Black-box API
 
-`IHomeableMotor` is a thin extension of `IMotor` that adds the hooks a homing strategy needs (`setProfileSpeed/Accel/Decel`, `setAutoStopOnStall`, `clearStall/Fault`, `resetPosition`). `LocalMotor` implements it.
+`LocalMotor` exposes four flags the application cares about — nothing else about the FSM needs to leak:
 
-> A test mock can implement it too, which is how the strategies can be unit-tested without hardware.
-
-### Stall homing (hard stop)
-
-Use when the axis has no limit switch but drives into a solid mechanical stop. The driver's stall detection (TMC2209 StallGuard for example) tells the FSM when the motor has hit the wall.
-
-```cpp
-#include <motor/homing/stall_homing_strategy.h>
-#include <motor/homing/homing_runner.h>
-
-motor::StallHomingStrategy::Config cfg;
-cfg.homingDirection = motor::Direction::BACKWARD;
-cfg.fastSpeedSps    = 2000;
-cfg.fastAccelMs     = 200;
-cfg.slowSpeedSps    = 500;
-cfg.slowAccelMs     = 100;
-cfg.backoffSteps    = 200;
-cfg.finalApproach   = true;   // false = single-touch, faster but less repeatable
-
-motor::StallHomingStrategy strategy(cfg);
-motor::HomingRunner        home_runner(mot, strategy, /*timeoutMs=*/15000);
-
-home_runner.start();
-while (home_runner.isRunning()) {
-    home_runner.step();
-    ungula::TimeControl::delayMs(5);
-}
-if (!home_runner.succeeded()) { /* report / retry / fault */ }
-```
-
-`setAutoStopOnStall(true)` is enforced by the strategy in `begin()` — without it the motor would run into the stop indefinitely.
-
-### Limit-switch homing
-
-Use when the axis has a real limit switch registered on the motor. The strategy never reads the GPIO itself — `LocalMotor` already handles debouncing and the FSM reports `LimitReached` on its own.
+| Method | Meaning |
+| --- | --- |
+| `motor.home()` | Kick off homing using the installed strategy. Non-blocking. Cancels any in-progress motion first. |
+| `motor.isHoming()` | True while the homing sequence is advancing. Goes false on success, failure, user stop, or watchdog. |
+| `motor.isHomed()` | True once a homing run has succeeded. Seeded at `begin()` from the strategy (limit-switch strategies can report "already on the switch" after a reboot; stall strategies always start false). Cleared by any user-initiated motion that moves the axis off home. |
+| `motor.wasLimitHit()` | Latches on any limit-triggered stop. Auto-clears once the axis resumes moving AND every limit pin has released. |
 
 ```cpp
 #include <motor/homing/limit_switch_homing_strategy.h>
@@ -291,35 +256,77 @@ Use when the axis has a real limit switch registered on the motor. The strategy 
 motor::LimitSwitchHomingStrategy::Config cfg;
 cfg.homingDirection = motor::Direction::BACKWARD;
 cfg.fastSpeedSps    = 3000;
+cfg.slowSpeedSps    = 500;
 cfg.backoffSteps    = 300;
 
 motor::LimitSwitchHomingStrategy strategy(cfg);
-motor::HomingRunner              home_runner(mot, strategy, 10000);
 
-home_runner.start();
-while (home_runner.isRunning()) { home_runner.step(); }
-```
+void setup() {
+    // ... driver wiring, profiles, limits ...
+    mot.setHomingStrategy(&strategy);
+    mot.setHomingTimeout(10000);   // 0 = no watchdog; strategy decides
+    mot.begin();                   // seeds isHomed() from strategy.isAtHomeReference()
+    mot.enable();
+}
 
-Register the switch on the motor first with `addLimitBackward(pin)` or `addLimitForward(pin)` matching `homingDirection`.
+void onHomeButton() {
+    mot.home();                    // fire and forget
+}
 
-### Parallel multi-axis (multi-motor) homing
+void onStartCycle() {
+    if (!mot.isHomed()) { reportError(); return; }
+    mot.moveTo(25.0F, motor::DistanceUnit::MM);
+}
 
-`HomingRunner` is non-blocking, so homing two motors at once is a single loop that ticks both runners:
-
-```cpp
-motor::HomingRunner home_x_runner(xMotor, xStrategy, 10000);
-motor::HomingRunner home_y_runner(yMotor, yStrategy, 10000);
-
-home_x_runner.start();
-home_y_runner.start();
-while (home_x_runner.isRunning() || home_y_runner.isRunning()) {
-    home_x_runner.step();
-    home_y_runner.step();
-    ungula::TimeControl::delayMs(5);
+void loop() {
+    if (!mot.isMoving() && !mot.isHoming()) {
+        project_state_ = State::Idle;  // all motion done, back to idle
+    }
 }
 ```
 
-> A timeout of 0 disables the wall-clock guard. Use this only if and only if the strategy has its own internal deadline.
+`stop()` and `emergencyStop()` automatically abort any in-progress homing — the host never needs to coordinate between "stop the motor" and "stop the homing sequence".
+
+### Strategies
+
+The strategy decides HOW to find the reference. Same motor, different strategy in different projects. The strategy talks only to `IHomeableMotor` (the motor extended with the few hooks it needs — profile setters, clear-stall/fault, reset-position, peek-at-limit). That's how strategies get unit-tested against a mock with no hardware.
+
+**Stall homing** — no limit switch, drive into a hard mechanical stop and read the driver's stall signal (TMC2209 StallGuard, DIAG pin, etc.). The strategy forces `setAutoStopOnStall(true)` in `begin()` so the FSM actually transitions to `Stall` on detection.
+
+```cpp
+#include <motor/homing/stall_homing_strategy.h>
+
+motor::StallHomingStrategy::Config cfg;
+cfg.homingDirection = motor::Direction::BACKWARD;
+cfg.fastSpeedSps    = 2000;
+cfg.slowSpeedSps    = 500;
+cfg.backoffSteps    = 200;
+cfg.finalApproach   = true;  // false = single-touch, faster but less repeatable
+
+motor::StallHomingStrategy strategy(cfg);
+mot.setHomingStrategy(&strategy);
+```
+
+Stall-based homing has no steady-state signal, so `isHomed()` always starts false after a reboot — the caller must run `home()` before trusting position.
+
+**Limit-switch homing** — real limit switch registered on the motor via `addLimitBackward(pin)` or `addLimitForward(pin)` matching `homingDirection`. The strategy never reads the GPIO directly; `LocalMotor` owns debouncing and the FSM reports `LimitReached` on its own. Because the switch state is a steady-state signal, limit-switch homing can seed `isHomed()` at `begin()` time: if the axis happens to be sitting on the switch after a reboot, the motor already knows it's at home.
+
+### Parallel multi-axis homing
+
+Each motor owns its own homing run, so coordinating two axes is just two calls and two flags:
+
+```cpp
+mot_x.home();
+mot_y.home();
+while (mot_x.isHoming() || mot_y.isHoming()) {
+    ungula::TimeControl::delayMs(5);
+}
+if (!mot_x.isHomed() || !mot_y.isHomed()) { /* report / retry */ }
+```
+
+### `HomingRunner` (advanced)
+
+`HomingRunner` still ships as a standalone helper for callers that want to drive a strategy against an arbitrary `IHomeableMotor` implementation without going through `LocalMotor::home()` (tests, custom motor backends). For every production use on real `LocalMotor` the black-box API above is the right path — `LocalMotor` runs the runner internally, in-phase with the service timer.
 
 ## Directory structure and contents
 

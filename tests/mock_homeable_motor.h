@@ -27,6 +27,20 @@ namespace motor {
                 MotorFsmState scriptedState = MotorFsmState::Idle;
                 int32_t scriptedPosition = 0;
 
+                // Scripted limit-switch state, keyed by direction. Used by the
+                // new isLimitAtDirection() hook so strategies that peek at the
+                // physical pin (e.g. LimitSwitchHomingStrategy::isAtHomeReference)
+                // can be exercised without real hardware.
+                bool scriptedLimitBackward = false;
+                bool scriptedLimitForward = false;
+
+                // Scripted black-box status bits for callers that want to
+                // verify propagation (nothing in the strategies reads these
+                // today; provided for higher-level tests that wrap the mock).
+                bool scriptedWasLimitHit = false;
+                bool scriptedIsHoming = false;
+                bool scriptedIsHomed = false;
+
                 // ---- recorded outputs ----------------------------------------------
 
                 struct ProfileWrite {
@@ -100,6 +114,15 @@ namespace motor {
                 bool isMoving() const override {
                     return running_;
                 }
+                bool wasLimitHit() const override {
+                    return scriptedWasLimitHit;
+                }
+                bool isHoming() const override {
+                    return scriptedIsHoming;
+                }
+                bool isHomed() const override {
+                    return scriptedIsHomed;
+                }
 
                 // ---- IHomeableMotor extras ----------------------------------------
 
@@ -144,6 +167,11 @@ namespace motor {
                 void resetPosition() override {
                     ++resetPositionCount;
                     scriptedPosition = 0;
+                }
+
+                bool isLimitAtDirection(Direction dir) const override {
+                    return (dir == Direction::BACKWARD) ? scriptedLimitBackward
+                                                        : scriptedLimitForward;
                 }
 
             private:

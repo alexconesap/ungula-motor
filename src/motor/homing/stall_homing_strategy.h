@@ -53,6 +53,14 @@ namespace motor {
                 return succeeded_;
             }
 
+            /// @brief Stall-based homing has no steady-state signal — at
+            /// rest the driver is "not stalling" whether or not the axis
+            /// is against the hard stop. Always false: after any reboot
+            /// the caller must run home() before the position is trusted.
+            bool isAtHomeReference(const IHomeableMotor& /*motor*/) const override {
+                return false;
+            }
+
         private:
             enum class Phase : uint8_t { FastApproach, Backoff, SlowApproach, Done };
 

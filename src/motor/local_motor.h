@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include "homing/i_homeable_motor.h"
+#include "homing/i_homing_strategy.h"
 #include "i_motor.h"
 #include "i_motor_driver.h"
 #include "limit_switch.h"
@@ -94,6 +95,20 @@ namespace motor {
 
             /// @brief Add forward (end-side) limit switch.
             void addLimitForward(uint8_t pin);
+
+            /// @brief Install the homing strategy. Call before begin() — the
+            /// motor queries the strategy at begin() time to seed isHomed()
+            /// (limit-switch strategies can answer from the pin state; stall
+            /// strategies always start false). The strategy reference must
+            /// outlive the motor. Pass nullptr to disable homing entirely
+            /// (home() then becomes a no-op and isHoming()/isHomed() always
+            /// return false).
+            void setHomingStrategy(IHomingStrategy* strategy);
+
+            /// @brief Optional wall-clock timeout for the homing sequence
+            /// (ms). 0 = no timeout, the strategy decides when to give up.
+            /// Applies to the next home() call.
+            void setHomingTimeout(uint32_t timeoutMs);
 
             /// @brief Subscribe to motor events.
             bool subscribe(IMotorEventListener* listener);
@@ -189,6 +204,17 @@ namespace motor {
             MotorFsmState state() const override;
             int32_t positionSteps() const override;
             bool isMoving() const override;
+            bool wasLimitHit() const override;
+            bool isHoming() const override;
+            bool isHomed() const override;
+
+            // ---- Homing ----
+
+            /// @brief Start the homing sequence using the strategy
+            /// configured via setHomingStrategy(). Safe to call from any
+            /// state — a motion in progress is cancelled first. No-op if
+            /// no strategy is configured.
+            void home();
 
             // ---- Fault acknowledgement ----
 
@@ -203,6 +229,10 @@ namespace motor {
             /// @brief Reset the step counter to zero (homing reference point).
             /// Only allowed when the motor is not moving.
             void resetPosition() override;
+
+            /// @brief IHomeableMotor — peek at a limit switch in the given
+            /// direction. Used by the homing strategy for isAtHomeReference().
+            bool isLimitAtDirection(Direction dir) const override;
 
             // ---- Diagnostics ----
 
@@ -261,6 +291,29 @@ namespace motor {
             MotionProfileSpec pendingProfile_ = {};
             bool hasPendingProfile_ = false;
 
+            // ---- Homing state (black-box) ----
+            //
+            // Owned entirely by LocalMotor — the strategy is a reference-only
+            // policy object. The runner logic lives inside handleServiceTimer()
+            // so the strategy's FSM polling is in-phase with the FSM
+            // transitions it cares about (no main-loop polling race).
+            enum class HomingPhase : uint8_t {
+                None,       /// Idle — no home() has been started.
+                Running,    /// begin() called, waiting for tick() to finish.
+                Done,       /// Last run finished successfully.
+                Failed      /// Last run was aborted or failed.
+            };
+
+            IHomingStrategy* homingStrategy_ = nullptr;
+            HomingPhase homingPhase_ = HomingPhase::None;
+            uint32_t homingStartMs_ = 0;
+            uint32_t homingTimeoutMs_ = 0;
+            bool isHomed_ = false;
+            bool wasLimitHit_ = false;
+            // Marker so the internal moves commanded by the homing strategy
+            // don't trip isHomed_ = false. Set inside home()/tick path.
+            bool internalMotionFromHoming_ = false;
+
             // Motion profiles (indexed by MotionProfile enum)
             ProfileConfig profiles_[PROFILE_COUNT] = {};
             MotionProfile activeProfile_ = MotionProfile::CYCLE;
@@ -282,6 +335,17 @@ namespace motor {
             void startMotion(int32_t speedSps, uint32_t accelMs, uint32_t decelMs);
             int32_t convertToSps(SpeedValue speed) const;
             int32_t convertToSteps(float value, DistanceUnit unit) const;
+            /// Drives the homing strategy in-phase with the serviceTimer —
+            /// avoids the main-loop polling race where TargetReached auto-
+            /// clears before the strategy sees it.
+            void serviceHoming(uint32_t nowMs);
+            /// Abort any in-progress homing (cleanup + phase := Failed).
+            /// No-op when no run is active. Called by emergencyStop / stop.
+            void abortHomingIfRunning();
+            /// Invalidate the "homed" latch because a user-initiated motion
+            /// has moved the axis off the home reference. Called from every
+            /// public motion command that isn't an internal homing move.
+            void invalidateHomedIfUserMotion();
 
             // Service timer trampoline
             static void onServiceTimer(void* arg);

@@ -42,6 +42,16 @@ namespace motor {
             /// @brief Outcome of the last run. Valid after tick() returns true or
             /// finish() has been called.
             virtual bool succeeded() const = 0;
+
+            /// @brief Boot-time snapshot: is the axis already at the home
+            /// reference right now, without starting a homing sequence?
+            /// Called by LocalMotor::begin() to seed the initial isHomed()
+            /// value across reboots.
+            ///   - Limit-switch strategies: read the configured limit pin;
+            ///     return true if asserted.
+            ///   - Stall-based strategies: no reliable "am I at home"
+            ///     signal exists at rest, so they return false.
+            virtual bool isAtHomeReference(const IHomeableMotor& motor) const = 0;
     };
 
 }  // namespace motor
