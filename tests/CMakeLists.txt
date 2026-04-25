@@ -49,7 +49,6 @@ set(LIB_MOTOR_SRC ${CMAKE_CURRENT_LIST_DIR}/../src)
 
 include_directories(
     ${CMAKE_CURRENT_LIST_DIR}
-    ${CMAKE_CURRENT_LIST_DIR}/ArduinoStub
     ${LIB_SRC}
     ${LIB_EMBLOGX_SRC}
     ${LIB_MOTOR_SRC}
@@ -65,11 +64,7 @@ add_compile_definitions(
 )
 
 add_executable(test_ungula_motor
-    test_stepper_config.cpp
-    test_stepper_controller.cpp
-    test_motor_driver_interface.cpp
     test_current_curve.cpp
-    ${LIB_MOTOR_SRC}/basic_motor/stepper_controller.cpp
     ${LIB_EMBLOGX_SRC}/emblogx/logger_core.cpp
     ${LIB_EMBLOGX_SRC}/emblogx/async_dispatcher.cpp
     ${LIB_EMBLOGX_SRC}/emblogx/sinks/console_sink.cpp
@@ -94,7 +89,24 @@ add_executable(test_ungula_motor_homing
 )
 target_link_libraries(test_ungula_motor_homing gtest_main)
 
+# ---------------------------------------------------------------------------
+# FSM, event publisher, coordinator, and remote-motor proxy — all pure
+# host code. No esp_timer / gptimer / FreeRTOS — these compile and run
+# entirely on the host. motor_fsm.cpp pulls TimeControl::syncNow() at
+# event-stamp time; UngulaCore is already on the include path.
+# ---------------------------------------------------------------------------
+add_executable(test_ungula_motor_core
+    test_motor_fsm.cpp
+    test_motor_event_publisher.cpp
+    test_remote_motor.cpp
+    test_motor_coordinator.cpp
+    ${LIB_MOTOR_SRC}/motor/motor_fsm.cpp
+    ${LIB_MOTOR_SRC}/motor/remote_motor.cpp
+)
+target_link_libraries(test_ungula_motor_core gtest_main)
+
 enable_testing()
 include(GoogleTest)
 gtest_discover_tests(test_ungula_motor)
 gtest_discover_tests(test_ungula_motor_homing)
+gtest_discover_tests(test_ungula_motor_core)

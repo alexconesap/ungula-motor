@@ -47,13 +47,3 @@
 // Remote motor (no platform dependencies)
 #include "motor/motor_coordinator.h"
 #include "motor/remote_motor.h"
-
-// ---- Legacy motor HAL (ungula::motor:: namespace) ----
-// Retained for RBB1/RBB2 compatibility. Will be removed.
-#include "basic_motor/i_motor_driver.h"
-#include "basic_motor/stepper_config.h"
-#include "basic_motor/stepper_controller.h"
-
-#ifdef MOTOR_DRIVER_TMC2209
-#include "basic_motor/tmc_stepper.h"
-#endif

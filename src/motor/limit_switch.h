@@ -37,8 +37,10 @@ namespace motor {
             }
 
             /// @brief Update debounce filter. Call every service tick (~10 ms).
-            /// @param nowMs Current time in milliseconds.
-            void update(uint32_t nowMs) {
+            /// @param nowMs Current time in milliseconds (signed 64-bit to
+            ///   match TimeControl::tick_ms_t — no narrowing from the
+            ///   service timer's `syncNow()` value).
+            void update(int64_t nowMs) {
                 if (pin_ == GPIO_NONE) {
                     return;
                 }
@@ -72,7 +74,7 @@ namespace motor {
             bool inverted_ = false;
             bool stable_ = false;
             bool lastRaw_ = false;
-            uint32_t lastChangeMs_ = 0;
+            int64_t lastChangeMs_ = 0;
     };
 
 }  // namespace motor

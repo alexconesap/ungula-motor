@@ -28,7 +28,9 @@ namespace motor {
             MotorFsmState previousState;
             MotorFsmState newState;
             int32_t positionSteps;
-            uint32_t timestampMs;  /// Stamped with syncNow() at creation time.
+            int64_t timestampMs;   /// Stamped with TimeControl::syncNow() at creation
+                                   /// time. Signed 64-bit to match the rest of the
+                                   /// time API (TimeControl::tick_ms_t) — no narrowing.
     };
 
 }  // namespace motor

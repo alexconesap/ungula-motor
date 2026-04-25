@@ -1,6 +1,6 @@
 # UngulaMotor
 
-> **High-performance embedded C++ libraries for ESP32, STM32 and other MCUs** — stepper motor control with autonomous ISR motion and 12-state FSM. Supported targets: ESP32 only.
+> **High-performance embedded C++ libraries for ESP32, STM32 and other MCUs** — stepper motor control with autonomous ISR motion and 11-state FSM. Supported targets: ESP32 only.
 
 Stepper motor control for ESP32. Provides autonomous motion with a finite state machine, acceleration ramps, limit switches, stall detection, and an event system — all driven by hardware timer ISRs with no polling required from your main loop.
 
@@ -67,7 +67,7 @@ void onStop() {
    (real hardware)         (proxy over transport)
          │
          ├── StepGenerator    GPTimer ISR for step pulses + ramp
-         ├── MotorFsm         12-state machine with event publishing
+         ├── MotorFsm         11-state machine with event publishing
          ├── LimitSwitch[]    Debounced, checked every 10 ms
          └── IMotorDriver     Hardware abstraction
                │
@@ -144,22 +144,23 @@ driver.begin();
 
 ## Motor FSM states
 
-The motor goes through these states automatically:
+The motor goes through 11 states automatically. `Decelerating` collapses straight to `Idle` once the ramp reaches zero — there is no separate "Stopped" stage. Soft terminal states (`TargetReached`, `LimitReached`) are auto-cleared back to `Idle` by the service timer one tick after they're observable. Hard terminal states (`Stall`, `Fault`) require an explicit `clearStall()` / `clearFault()` acknowledgement so the host actively decides to recover.
 
-| State | Meaning |
-| --- | --- |
-| `Disabled` | Driver output stage off. Call `enable()` to move to Idle. |
-| `Idle` | Ready for commands. |
-| `WaitingStart` | Command queued, waiting for conditions. |
-| `Starting` | Ramping up. |
-| `RunningForward` | Moving forward at target speed. |
-| `RunningBackward` | Moving backward at target speed. |
-| `Decelerating` | Ramping down after `stop()`. |
-| `Stopped` | Motion finished (deceleration complete). |
-| `TargetReached` | Positional move completed. |
-| `LimitReached` | Limit switch triggered — motion stopped. |
-| `Stall` | Stall detected — motion stopped. Call `clearStall()`. |
-| `Fault` | Hardware fault. Call `clearFault()`. |
+| State | Auto-clears? | Meaning |
+| --- | --- | --- |
+| `Disabled` | — | Driver output stage off. Call `enable()` to move to Idle. |
+| `Idle` | — | Ready for commands. |
+| `WaitingStart` | — | Profile loaded, waiting for `startTimeMs`. |
+| `Starting` | — | Ramping up. |
+| `RunningForward` | — | At target speed, forward. |
+| `RunningBackward` | — | At target speed, backward. |
+| `Decelerating` | → `Idle` | Ramping down after `stop()`. |
+| `TargetReached` | → `Idle` | Positional move completed (visible for one service tick). |
+| `LimitReached` | → `Idle` | Limit switch triggered (visible for one service tick). |
+| `Stall` | needs `clearStall()` | Stall detected — host acknowledges. |
+| `Fault` | needs `clearFault()` | Hardware fault — host acknowledges. |
+
+`emergencyStop()` is the heavy hammer — it reaches `Idle` from any reachable state, including `Stall` and `Fault`, bypassing the explicit acknowledgement (because if the operator hits e-stop they don't care why the motor stopped, only that it does).
 
 ## Events
 
@@ -358,11 +359,6 @@ src/
       homing_runner.h/cpp       Non-blocking driver for a strategy
       stall_homing_strategy.h/cpp         Hard-stop homing via stall detection
       limit_switch_homing_strategy.h/cpp  Limit-switch homing
-  basic_motor/                  Legacy HAL (ungula::motor:: namespace)
-    i_motor_driver.h            Old driver interface
-    stepper_config.h            Old config struct
-    stepper_controller.h/cpp    Old stepper with manual service() loop
-    tmc_stepper.h/cpp           Old TMC2209 wrapper (needs TMCStepper lib)
 ```
 
 ## Testing
@@ -392,13 +388,6 @@ ctest --output-on-failure
 | UngulaCore | `TimeControl` (FSM timestamps), `GpioAccess` (limit switches) |
 | UngulaHal | `Uart` (TMC2209 communication), `gpio` (driver pins) |
 | EmblogX | Logging in legacy TmcStepper only |
-| TMCStepper `0.7.3` (external) | Legacy `basic_motor/tmc_stepper` driver only. Not used by the modern `motor/` stack. |
-
-## Legacy: basic_motor
-
-The `basic_motor/` directory contains the original motor HAL used by two pieces of one of my projects: RBB1 and RBB2. It requires manual `service()` calls from your main loop and external ISR wiring. It will be removed once all nodes migrate to the new motor system.
-
-If you are starting a new project, use the `motor/` classes. See the quick start example at the top of this file.
 
 ## Acknowledgements
 

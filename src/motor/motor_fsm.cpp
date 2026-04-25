@@ -109,11 +109,16 @@ namespace motor {
     }
 
     bool MotorFsm::requestStop() {
-        if (state_ == MotorFsmState::Decelerating || isMoving()) {
+        // Active motion (incl. Decelerating, which `isMoving()` covers).
+        if (isMoving()) {
             return transition(MotorFsmState::Idle, MotorEventType::Stopped);
         }
-        // Stopped/TargetReached/LimitReached → Idle
-        if (state_ == MotorFsmState::Stopped || state_ == MotorFsmState::TargetReached ||
+        // Auto-clear of the soft terminal states the service timer leaves
+        // briefly visible (`TargetReached`, `LimitReached`). `Stall` and
+        // `Fault` are NOT cleared here — they require explicit
+        // `clearStall()` / `clearFault()` so the host actively
+        // acknowledges the condition.
+        if (state_ == MotorFsmState::TargetReached ||
             state_ == MotorFsmState::LimitReached) {
             return transition(MotorFsmState::Idle, MotorEventType::StateChanged);
         }

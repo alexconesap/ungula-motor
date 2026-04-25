@@ -108,7 +108,7 @@ namespace motor {
             /// @brief Optional wall-clock timeout for the homing sequence
             /// (ms). 0 = no timeout, the strategy decides when to give up.
             /// Applies to the next home() call.
-            void setHomingTimeout(uint32_t timeoutMs);
+            void setHomingTimeout(int64_t timeoutMs);
 
             /// @brief Subscribe to motor events.
             bool subscribe(IMotorEventListener* listener);
@@ -306,8 +306,10 @@ namespace motor {
 
             IHomingStrategy* homingStrategy_ = nullptr;
             HomingPhase homingPhase_ = HomingPhase::None;
-            uint32_t homingStartMs_ = 0;
-            uint32_t homingTimeoutMs_ = 0;
+            // Wall-clock anchors stored as int64_t to match
+            // TimeControl::syncNow() return type — no silent narrowing.
+            int64_t homingStartMs_ = 0;
+            int64_t homingTimeoutMs_ = 0;
             bool isHomed_ = false;
             bool wasLimitHit_ = false;
             // Marker so the internal moves commanded by the homing strategy
@@ -331,14 +333,14 @@ namespace motor {
             bool isLimitHitInDirection() const;
             void handleStall();
             void serviceMoving();
-            void servicePendingProfile(uint32_t nowMs);
+            void servicePendingProfile(int64_t nowMs);
             void startMotion(int32_t speedSps, uint32_t accelMs, uint32_t decelMs);
             int32_t convertToSps(SpeedValue speed) const;
             int32_t convertToSteps(float value, DistanceUnit unit) const;
             /// Drives the homing strategy in-phase with the serviceTimer —
             /// avoids the main-loop polling race where TargetReached auto-
             /// clears before the strategy sees it.
-            void serviceHoming(uint32_t nowMs);
+            void serviceHoming(int64_t nowMs);
             /// Abort any in-progress homing (cleanup + phase := Failed).
             /// No-op when no run is active. Called by emergencyStop / stop.
             void abortHomingIfRunning();

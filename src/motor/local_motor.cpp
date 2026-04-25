@@ -51,7 +51,7 @@ namespace motor {
         homingStrategy_ = strategy;
     }
 
-    void LocalMotor::setHomingTimeout(uint32_t timeoutMs) {
+    void LocalMotor::setHomingTimeout(int64_t timeoutMs) {
         homingTimeoutMs_ = timeoutMs;
     }
 
@@ -296,7 +296,7 @@ namespace motor {
         hasPendingProfile_ = true;
         portEXIT_CRITICAL(&g_motorMux);
 
-        uint32_t nowMs = ungula::TimeControl::syncNow();
+        int64_t nowMs = ungula::TimeControl::syncNow();
         if (profile.startTimeMs == 0 || profile.startTimeMs <= nowMs) {
             servicePendingProfile(nowMs);
         } else {
@@ -433,7 +433,7 @@ namespace motor {
     // Runs from handleServiceTimer — in-phase with FSM transitions so the
     // strategy sees TargetReached before the service loop's auto-clear
     // collapses it to Idle.
-    void LocalMotor::serviceHoming(uint32_t nowMs) {
+    void LocalMotor::serviceHoming(int64_t nowMs) {
         if (homingPhase_ != HomingPhase::Running || homingStrategy_ == nullptr) {
             return;
         }
@@ -449,10 +449,10 @@ namespace motor {
         internalMotionFromHoming_ = true;
         const bool done = homingStrategy_->tick(*this);
         if (done) {
-            const bool ok = homingStrategy_->succeeded();
-            homingStrategy_->finish(*this, ok);
-            homingPhase_ = ok ? HomingPhase::Done : HomingPhase::Failed;
-            if (ok) {
+            const bool success = homingStrategy_->succeeded();
+            homingStrategy_->finish(*this, success);
+            homingPhase_ = success ? HomingPhase::Done : HomingPhase::Failed;
+            if (success) {
                 isHomed_ = true;
             }
         }
@@ -486,7 +486,7 @@ namespace motor {
         cachedPosition_ = stepper_.position();
 
         // Update limit switches (debounce polling)
-        uint32_t nowMs = ungula::TimeControl::syncNow();
+        int64_t nowMs = ungula::TimeControl::syncNow();
         for (int32_t idx = 0; idx < backwardLimitCount_; idx++) {
             limitsBackward_[idx].update(nowMs);
         }
@@ -571,10 +571,12 @@ namespace motor {
         // the strategy has a chance to react.
         serviceHoming(nowMs);
 
-        // Auto-transition terminal states back to Idle
+        // Auto-clear of the soft terminal states. Stall / Fault are
+        // intentionally NOT cleared here — those require an explicit
+        // host acknowledgement.
         MotorFsmState afterState = fsm_.state();
         if (afterState == MotorFsmState::TargetReached ||
-            afterState == MotorFsmState::LimitReached || afterState == MotorFsmState::Stopped) {
+            afterState == MotorFsmState::LimitReached) {
             fsm_.requestStop();
         }
     }
@@ -680,7 +682,7 @@ namespace motor {
         }
     }
 
-    void LocalMotor::servicePendingProfile(uint32_t nowMs) {
+    void LocalMotor::servicePendingProfile(int64_t nowMs) {
         // Snapshot profile under lock — caller may write from another context
         portENTER_CRITICAL(&g_motorMux);
         if (!hasPendingProfile_) {

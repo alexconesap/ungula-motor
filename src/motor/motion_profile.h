@@ -26,7 +26,10 @@ namespace motor {
     /// implemented by LocalMotor. The remaining fields are reserved for
     /// future trapezoidal/triangular profile execution.
     struct MotionProfileSpec {
-            uint32_t startTimeMs;   /// Absolute start time (from syncNow()). 0 = start immediately.
+            int64_t startTimeMs;    /// Absolute start time (from TimeControl::syncNow()).
+                                    /// 0 = start immediately. Signed 64-bit to match
+                                    /// the rest of the time API and avoid silent
+                                    /// narrowing from `syncNow()`'s int64_t return.
             int32_t startPosition;  /// Expected position at start (for validation). TODO: not yet
                                     /// used.
             int32_t targetPosition;     /// Absolute target position in steps.
