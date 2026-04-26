@@ -53,8 +53,26 @@ namespace motor {
             // need to ride in the cached state messages from the far end.
             // For now, report conservative defaults. Wire these up when the
             // protocol grows the needed fields.
+            bool isIdle() const override {
+                return state() == MotorFsmState::Idle;
+            }
+            bool isStalling() const override {
+                return state() == MotorFsmState::Stall;
+            }
+            StopReason lastStopReason() const override {
+                return StopReason::None;
+            }
             bool wasLimitHit() const override {
                 return false;
+            }
+            bool isLimitActive(Direction /*dir*/) const override {
+                return false;
+            }
+            bool isLimitActive(Direction /*dir*/, int32_t /*index*/) const override {
+                return false;
+            }
+            int32_t limitCount(Direction /*dir*/) const override {
+                return 0;
             }
             bool isHoming() const override {
                 return false;

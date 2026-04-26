@@ -50,11 +50,9 @@ namespace motor {
             /// @brief Zero the step counter (homing reference point).
             virtual void resetPosition() = 0;
 
-            /// @brief Is a limit switch in the given direction currently
-            /// asserted? Lets a homing strategy peek at the physical state
-            /// (e.g., limit-switch strategies use this for the boot-time
-            /// isAtHomeReference() check).
-            virtual bool isLimitAtDirection(Direction dir) const = 0;
+            // Note: the per-direction "is the limit currently asserted"
+            // query is now part of IMotor as `isLimitActive(Direction)` —
+            // strategies call that. No separate hook needed here.
     };
 
 }  // namespace motor

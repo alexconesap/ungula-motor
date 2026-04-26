@@ -204,7 +204,13 @@ namespace motor {
             MotorFsmState state() const override;
             int32_t positionSteps() const override;
             bool isMoving() const override;
+            bool isIdle() const override;
+            bool isStalling() const override;
+            StopReason lastStopReason() const override;
             bool wasLimitHit() const override;
+            bool isLimitActive(Direction dir) const override;
+            bool isLimitActive(Direction dir, int32_t index) const override;
+            int32_t limitCount(Direction dir) const override;
             bool isHoming() const override;
             bool isHomed() const override;
 
@@ -230,9 +236,11 @@ namespace motor {
             /// Only allowed when the motor is not moving.
             void resetPosition() override;
 
-            /// @brief IHomeableMotor — peek at a limit switch in the given
-            /// direction. Used by the homing strategy for isAtHomeReference().
-            bool isLimitAtDirection(Direction dir) const override;
+            // Note: `isLimitActive(Direction)` (declared above as part of
+            // IMotor) replaces the old `isLimitAtDirection(Direction)`
+            // hook the homing strategies used to call. The strategies were
+            // updated to call `isLimitActive` directly — there is nothing
+            // to override on the IHomeableMotor side any more.
 
             // ---- Diagnostics ----
 
@@ -316,9 +324,18 @@ namespace motor {
             // don't trip isHomed_ = false. Set inside home()/tick path.
             bool internalMotionFromHoming_ = false;
 
-            // Motion profiles (indexed by MotionProfile enum)
+            // Motion profiles (indexed by MotionProfile enum). Seeded with
+            // safe defaults (low speed, smooth ramp) in begin() so a bare-
+            // bones project — driver + pins + begin + enable + moveForward —
+            // actually moves. Override any field with setProfile*() before
+            // motion if you want a different feel.
             ProfileConfig profiles_[PROFILE_COUNT] = {};
             MotionProfile activeProfile_ = MotionProfile::CYCLE;
+
+            // Latched "why did the last motion end?" answer. Updated on
+            // every motion-ending FSM transition by the service timer and
+            // reset to None when a new motion command starts.
+            StopReason lastStopReason_ = StopReason::None;
 
             // Unit conversion
             float stepsPerMm_ = 0.0F;

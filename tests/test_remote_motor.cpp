@@ -14,11 +14,13 @@
 
 namespace {
 
+    using motor::Direction;
     using motor::DistanceUnit;
     using motor::MotionProfileSpec;
     using motor::MotorCommandType;
     using motor::MotorFsmState;
     using motor::RemoteMotor;
+    using motor::StopReason;
     using test_helpers::RecordingSink;
 
     // ---- Initial state ----
@@ -148,6 +150,35 @@ namespace {
         EXPECT_FALSE(m.wasLimitHit());
         EXPECT_FALSE(m.isHoming());
         EXPECT_FALSE(m.isHomed());
+        EXPECT_FALSE(m.isLimitActive(Direction::FORWARD));
+        EXPECT_FALSE(m.isLimitActive(Direction::BACKWARD));
+        EXPECT_FALSE(m.isLimitActive(Direction::FORWARD, 0));
+        EXPECT_EQ(m.limitCount(Direction::FORWARD), 0);
+        EXPECT_EQ(m.limitCount(Direction::BACKWARD), 0);
+        EXPECT_EQ(m.lastStopReason(), StopReason::None);
+    }
+
+    TEST(RemoteMotorTest, IsIdleAndIsStallingDeriveFromCachedState) {
+        // The proxy can answer the simple "what's my state" questions
+        // straight from the cache — no protocol upgrade needed for these.
+        RecordingSink sink;
+        RemoteMotor m(sink, 0);
+
+        // Default Disabled — neither idle nor stalling.
+        EXPECT_FALSE(m.isIdle());
+        EXPECT_FALSE(m.isStalling());
+
+        m.updateState(MotorFsmState::Idle, /*position=*/0);
+        EXPECT_TRUE(m.isIdle());
+        EXPECT_FALSE(m.isStalling());
+
+        m.updateState(MotorFsmState::Stall, /*position=*/0);
+        EXPECT_FALSE(m.isIdle());
+        EXPECT_TRUE(m.isStalling());
+
+        m.updateState(MotorFsmState::RunningForward, /*position=*/0);
+        EXPECT_FALSE(m.isIdle());
+        EXPECT_FALSE(m.isStalling());
     }
 
 }  // namespace

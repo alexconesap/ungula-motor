@@ -23,7 +23,7 @@ namespace motor {
     LimitSwitchHomingStrategy::LimitSwitchHomingStrategy(const Config& cfg) : cfg_(cfg) {}
 
     bool LimitSwitchHomingStrategy::isAtHomeReference(const IHomeableMotor& motor) const {
-        return motor.isLimitAtDirection(cfg_.homingDirection);
+        return motor.isLimitActive(cfg_.homingDirection);
     }
 
     void LimitSwitchHomingStrategy::begin(IHomeableMotor& motor) {

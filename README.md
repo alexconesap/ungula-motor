@@ -6,51 +6,86 @@ Stepper motor control for ESP32. Provides autonomous motion with a finite state 
 
 ## How it works
 
-You create a `LocalMotor`, wire it to an `IMotorDriver` (e.g. `Tmc2209`), call `begin()`, and the motor runs itself. Step pulse generation, acceleration ramps, limit switch monitoring, and stall detection all happen inside timer ISRs. Your application just sends commands (`moveForward()`, `stop()`, `moveTo(...)`) and reacts to events.
+You create a `LocalMotor`, wire it to an `IMotorDriver` (e.g. `Tmc2209`), call `begin()`, and the motor runs itself. Step pulse generation, acceleration ramps, limit switch monitoring, and stall detection all happen inside timer ISRs. Your application just sends commands (`moveForward()`, `stop()`, `moveTo(...)`) and reacts to events through a small set of stable getters — see [Black-box status getters](#black-box-status-getters).
+
+## Minimal project — pins + defaults, just run
+
+The motor seeds every motion profile that you did not configure with a safe default at `begin()` time (500 SPS, 500 ms ramp). That means a bare-bones project — driver + pins + `begin()` + `enable()` + `moveForward()` — actually moves at a slow, visible speed without any extra setup. Override any field with `setProfileSpeed/Accel/Decel()` before motion if you want a different feel.
 
 ```cpp
 #include <motor/local_motor.h>
 #include <motor/drivers/tmc2209.h>
 
-// Create the driver — owns all GPIO pins and UART communication
+// Driver owns STEP, EN, DIR pins and the UART
 tmc::Tmc2209 driver(uart, 0.11F, PIN_STEP, PIN_EN, PIN_DIR, /*addr=*/0);
-
-// Create the motor — owns the FSM, step generator, and limit switches
 motor::LocalMotor mot;
 
 void setup() {
-    // Wire driver to motor
+    mot.setDriver(driver);
+    mot.begin();          // seeds default 500 SPS / 500 ms ramps
+    mot.enable();
+    mot.moveForward();    // starts moving at the default profile
+}
+
+void loop() {
+    // Nothing to do. The motor runs itself.
+}
+```
+
+That is the smallest project that compiles and runs on real hardware. From there, add limits, stall, homing, and faster profiles as the application needs them.
+
+## Realistic project — limits, stall, and a homing strategy
+
+```cpp
+#include <motor/local_motor.h>
+#include <motor/drivers/tmc2209.h>
+#include <motor/homing/limit_switch_homing_strategy.h>
+
+tmc::Tmc2209 driver(uart, 0.11F, PIN_STEP, PIN_EN, PIN_DIR, /*addr=*/0);
+motor::LocalMotor mot;
+
+motor::LimitSwitchHomingStrategy::Config homingCfg;
+motor::LimitSwitchHomingStrategy homing(homingCfg);
+
+void setup() {
     mot.setDriver(driver);
     mot.setRunCurrent(1100);
     mot.setMicrosteps(16);
     mot.setStepsPerMm(200.0F);
 
-    // Add limit switches (optional)
-    mot.addLimitBackward(PIN_HOME);
-    mot.addLimitForward(PIN_END);
+    // Limits (NC by default; pass invertPolarity=true for NO wiring)
+    mot.addLimitBackward(PIN_HOME);   // index 0 on the BACKWARD side
+    mot.addLimitForward(PIN_END);     // index 0 on the FORWARD side
 
-    // Configure motion profiles
+    // Stall behaviour — motor goes to FSM Stall and stops on detection
+    mot.setAutoStopOnStall(true);
+
+    // Profiles — override the defaults for a faster jog
     mot.setProfileSpeed(motor::MotionProfile::JOG, 10000);
     mot.setProfileAccel(motor::MotionProfile::JOG, 500);
 
-    // Start — after this, the motor is fully autonomous
+    // Homing strategy
+    homingCfg.homingDirection = motor::Direction::BACKWARD;
+    homingCfg.fastSpeedSps    = 3000;
+    homingCfg.slowSpeedSps    = 500;
+    homingCfg.backoffSteps    = 300;
+    mot.setHomingStrategy(&homing);
+    mot.setHomingTimeout(10000);
+
     mot.begin();
     mot.enable();
 }
 
 void loop() {
-    // No motor polling needed. Do your application work.
+    // Do the application's work. Nothing motor-specific belongs here.
 }
 
-// Triggered by a button, HTTP endpoint, or protocol message:
 void onJogForward() {
     mot.setActiveProfile(motor::MotionProfile::JOG);
     mot.moveForward();
 }
-
-void onStop() {
-    mot.stop();  // decelerates using the active profile's ramp
-}
+void onStop() { mot.stop(); }
+void onHome() { mot.home(); }
 ```
 
 ## Architecture
@@ -80,6 +115,71 @@ void onStop() {
 **RemoteMotor** implements the same `IMotor` interface but sends commands through an `IMotorCommandSink` (ESP-NOW, UART, whatever). Useful when one board controls a motor on another board.
 
 **MotorCoordinator** manages multiple `IMotor` instances for multi-axis systems.
+
+## Black-box status getters
+
+The host should never need to reason about which FSM state the motor is currently in. Every question worth asking has a stable getter that survives the FSM's auto-clear of the soft terminal states (`TargetReached`, `LimitReached`):
+
+| Question | Getter | Notes |
+| --- | --- | --- |
+| Is the motor running? | `isMoving()` | True for `Starting`, `RunningForward`, `RunningBackward`, `Decelerating`, `WaitingStart`. |
+| Is it idle? | `isIdle()` | True only for FSM `Idle`. False while moving and false in `Stall` / `Fault` (the host has not acknowledged yet). |
+| Is it stalling? | `isStalling()` | Either the driver is asserting stall right now, or the FSM is latched in `Stall` waiting for `clearStall()`. |
+| Why did the last motion end? | `lastStopReason()` | Returns a `StopReason`. Latched on the motion-ending event and kept across the FSM auto-clear. Reset to `None` on the next motion command. |
+| Did a limit cause the stop? | `wasLimitHit()` | Sticky — auto-clears once the axis moves again *and* every limit has released. |
+| Is limit N currently asserted? | `isLimitActive(dir, index)` | Per-switch query. `isLimitActive(dir)` answers "any switch on that side". `limitCount(dir)` for iterating. |
+| Is a homing run in progress? | `isHoming()` | Goes false on success, failure, user stop, e-stop, or watchdog. |
+| Is the axis homed? | `isHomed()` | True after a successful homing run. Seeded at `begin()` from limit-switch strategies; always false at boot for stall strategies. |
+
+### `StopReason` values
+
+| Value | Meaning |
+| --- | --- |
+| `None` | No motion has run yet, or one is in progress. |
+| `TargetReached` | A `moveTo` / `moveBy` / profile move completed cleanly. |
+| `UserStop` | `stop()` was called and the deceleration ramp finished. |
+| `LimitHit` | A limit switch fired during motion. |
+| `Stall` | The driver reported a stall. |
+| `Fault` | A hardware fault was raised. |
+| `EmergencyStop` | `emergencyStop()` was called. |
+| `Disabled` | `disable()` was called. |
+
+`stopReasonName(reason)` returns the human-readable name for logs.
+
+### Status query cookbook
+
+```cpp
+// "Is the motor idle because it just completed a move, or because the
+//  user pressed stop, or because it stalled?"
+if (mot.isIdle()) {
+    switch (mot.lastStopReason()) {
+        case motor::StopReason::TargetReached: handleCycleComplete(); break;
+        case motor::StopReason::UserStop:      handleUserCancel();    break;
+        case motor::StopReason::Stall:         handleStallRecovery(); break;
+        case motor::StopReason::LimitHit:      handleLimitRecovery(); break;
+        case motor::StopReason::Fault:         handleFault();         break;
+        default: /* None / Disabled / EmergencyStop — nothing to do */ break;
+    }
+}
+
+// "Is limit switch 0 on the backward side closed right now?"
+if (mot.isLimitActive(motor::Direction::BACKWARD, 0)) {
+    showHomeIndicator();
+}
+
+// "Sweep every registered limit on the forward side."
+for (int32_t i = 0; i < mot.limitCount(motor::Direction::FORWARD); ++i) {
+    if (mot.isLimitActive(motor::Direction::FORWARD, i)) {
+        // ...
+    }
+}
+
+// "Is anything happening on the motor right now that should block a new
+//  move command?"
+const bool busy = mot.isMoving() || mot.isHoming() || mot.isStalling();
+```
+
+Stall and Fault still require an explicit `clearStall()` / `clearFault()` from the host — that is intentional, the operator must acknowledge before the FSM accepts new commands. `emergencyStop()` is the override: it forces the FSM back to `Idle` from any reachable state.
 
 ## IMotorDriver — writing your own driver
 
@@ -242,14 +342,11 @@ Homing is a multi-step dance (approach → stop signal → back off → slow re-
 
 ### Black-box API
 
-`LocalMotor` exposes four flags the application cares about — nothing else about the FSM needs to leak:
+`LocalMotor` exposes a single non-blocking `home()` plus the homing-related flags from the [Black-box status getters](#black-box-status-getters) table above (`isHoming`, `isHomed`, `wasLimitHit`). Nothing else about the FSM needs to leak.
 
 | Method | Meaning |
 | --- | --- |
 | `motor.home()` | Kick off homing using the installed strategy. Non-blocking. Cancels any in-progress motion first. |
-| `motor.isHoming()` | True while the homing sequence is advancing. Goes false on success, failure, user stop, or watchdog. |
-| `motor.isHomed()` | True once a homing run has succeeded. Seeded at `begin()` from the strategy (limit-switch strategies can report "already on the switch" after a reboot; stall strategies always start false). Cleared by any user-initiated motion that moves the axis off home. |
-| `motor.wasLimitHit()` | Latches on any limit-triggered stop. Auto-clears once the axis resumes moving AND every limit pin has released. |
 
 ```cpp
 #include <motor/homing/limit_switch_homing_strategy.h>

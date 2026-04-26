@@ -67,12 +67,53 @@ namespace motor {
             // LimitReached / Stall / Fault directly — these getters
             // summarise the persistent "what happened" view.
 
+            /// @brief True if the motor is at rest and ready for the next
+            /// motion command. Equivalent to `state() == Idle`, but exposed
+            /// as a getter so callers don't have to compare against the FSM
+            /// enum. Cheap and always safe to poll.
+            virtual bool isIdle() const = 0;
+
+            /// @brief True while a stall is being reported — either the
+            /// driver is currently asserting stall right now, or the FSM is
+            /// latched in `Stall` waiting for `clearStall()`. One getter,
+            /// covers both the transient and the latched view.
+            virtual bool isStalling() const = 0;
+
+            /// @brief Why did the most recent motion end? Latched on every
+            /// motion-ending transition and kept across the FSM's auto-
+            /// clear of `TargetReached` / `LimitReached`. Reset to `None`
+            /// when the next motion command starts, so reading this while
+            /// `isMoving()` is true tells the caller about a previous run
+            /// (or `None` if the motor has never moved). The intended use
+            /// is: `if (motor.isIdle()) { switch (motor.lastStopReason()) { ... } }`.
+            virtual StopReason lastStopReason() const = 0;
+
             /// @brief True if the motor last came to rest because a limit
             /// switch fired. Remains true across the FSM's auto-clear back
             /// to Idle. Cleared automatically when motion resumes *and*
             /// every registered limit is no longer asserted — i.e., the
             /// axis has physically backed off the switch.
             virtual bool wasLimitHit() const = 0;
+
+            /// @brief Is any limit switch in the given direction currently
+            /// asserted (debounced, polarity-aware)? Returns false if no
+            /// switch is registered for that direction. Use this to ask
+            /// "am I sitting on the home switch?" without having to read
+            /// the GPIO pin yourself.
+            virtual bool isLimitActive(Direction dir) const = 0;
+
+            /// @brief Same as `isLimitActive(dir)` but for a specific
+            /// switch index in the given direction (`0`-based, up to
+            /// `motor::limit::MAX_PER_DIRECTION - 1`). Returns false for
+            /// out-of-range indices or unregistered switches. Use this to
+            /// distinguish between two switches on the same side
+            /// (e.g., "home" vs. "crash" on the backward end).
+            virtual bool isLimitActive(Direction dir, int32_t index) const = 0;
+
+            /// @brief Number of limit switches registered for that
+            /// direction. Lets the caller iterate `isLimitActive(dir, i)`
+            /// without hard-coding the count.
+            virtual int32_t limitCount(Direction dir) const = 0;
 
             /// @brief True while an internal homing sequence is still
             /// advancing. Goes false as soon as the sequence terminates for

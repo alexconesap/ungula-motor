@@ -126,6 +126,25 @@ namespace motor {
     bool LocalMotor::begin() {
         assert(driver_ != nullptr);
 
+        // Seed every profile that the user did not configure with a safe
+        // default — low speed, smooth ramp. Picks a value only when the
+        // slot is still zero, so explicit setProfile*() calls before
+        // begin() are preserved. The numbers are conservative: 500 SPS
+        // with a 500 ms ramp rarely damages anything and is visible to
+        // the eye, which is what a "first run" project wants.
+        for (int32_t i = 0; i < PROFILE_COUNT; ++i) {
+            ProfileConfig& p = profiles_[i];
+            if (p.speedSps == 0) {
+                p.speedSps = 500;
+            }
+            if (p.accelTimeMs == 0U) {
+                p.accelTimeMs = 500U;
+            }
+            if (p.decelTimeMs == 0U) {
+                p.decelTimeMs = 500U;
+            }
+        }
+
         // Initialize motor driver — configures GPIO pins and register defaults
         driver_->begin();
 
@@ -205,6 +224,7 @@ namespace motor {
         portEXIT_CRITICAL(&g_motorMux);
         driver_->disable();
         fsm_.requestDisable();
+        lastStopReason_ = StopReason::Disabled;
     }
 
     // ============================================================
@@ -216,6 +236,7 @@ namespace motor {
             return;
         }
         invalidateHomedIfUserMotion();
+        lastStopReason_ = StopReason::None;
         direction_ = Direction::FORWARD;
         applyDirection();
         stepper_.clearTargetPosition();  // Continuous — no ISR target
@@ -230,6 +251,7 @@ namespace motor {
             return;
         }
         invalidateHomedIfUserMotion();
+        lastStopReason_ = StopReason::None;
         direction_ = Direction::BACKWARD;
         applyDirection();
         stepper_.clearTargetPosition();  // Continuous — no ISR target
@@ -253,6 +275,7 @@ namespace motor {
         }
 
         invalidateHomedIfUserMotion();
+        lastStopReason_ = StopReason::None;
 
         portENTER_CRITICAL(&g_motorMux);
         moveTarget_ = absoluteTarget;
@@ -290,6 +313,7 @@ namespace motor {
         }
 
         invalidateHomedIfUserMotion();
+        lastStopReason_ = StopReason::None;
 
         portENTER_CRITICAL(&g_motorMux);
         pendingProfile_ = profile;
@@ -334,7 +358,13 @@ namespace motor {
         hasPendingProfile_ = false;
         decelerating_ = false;
         portEXIT_CRITICAL(&g_motorMux);
+        // Internal e-stop calls inside the homing strategy must not
+        // overwrite the latched reason — homing's success/failure path
+        // sets the reason later. Skip latching for those.
         fsm_.requestEmergencyStop();
+        if (!internalMotionFromHoming_) {
+            lastStopReason_ = StopReason::EmergencyStop;
+        }
     }
 
     // ============================================================
@@ -353,8 +383,49 @@ namespace motor {
         return fsm_.isMoving();
     }
 
+    bool LocalMotor::isIdle() const {
+        return fsm_.state() == MotorFsmState::Idle;
+    }
+
+    bool LocalMotor::isStalling() const {
+        // Either the FSM is latched in Stall (waiting for clearStall) or
+        // the driver is asserting stall right now. One getter, both views.
+        if (fsm_.state() == MotorFsmState::Stall) {
+            return true;
+        }
+        return (driver_ != nullptr) && driver_->isStalling();
+    }
+
+    StopReason LocalMotor::lastStopReason() const {
+        return lastStopReason_;
+    }
+
     bool LocalMotor::wasLimitHit() const {
         return wasLimitHit_;
+    }
+
+    bool LocalMotor::isLimitActive(Direction dir) const {
+        return (dir == Direction::BACKWARD) ? isBackwardLimitHit() : isForwardLimitHit();
+    }
+
+    bool LocalMotor::isLimitActive(Direction dir, int32_t index) const {
+        if (index < 0 || index >= limit::MAX_PER_DIRECTION) {
+            return false;
+        }
+        if (dir == Direction::BACKWARD) {
+            if (index >= backwardLimitCount_) {
+                return false;
+            }
+            return limitsBackward_[index].isTriggered();
+        }
+        if (index >= forwardLimitCount_) {
+            return false;
+        }
+        return limitsForward_[index].isTriggered();
+    }
+
+    int32_t LocalMotor::limitCount(Direction dir) const {
+        return (dir == Direction::BACKWARD) ? backwardLimitCount_ : forwardLimitCount_;
     }
 
     bool LocalMotor::isHoming() const {
@@ -376,10 +447,6 @@ namespace motor {
         stepper_.resetPosition();
     }
 
-    bool LocalMotor::isLimitAtDirection(Direction dir) const {
-        return (dir == Direction::BACKWARD) ? isBackwardLimitHit() : isForwardLimitHit();
-    }
-
     // ============================================================
     // Homing (internal black-box)
     // ============================================================
@@ -391,6 +458,9 @@ namespace motor {
         // Cancel whatever was happening. This also aborts a previous home()
         // run cleanly (abortHomingIfRunning is called by emergencyStop).
         emergencyStop();
+        // The cancellation above latches StopReason::EmergencyStop — wipe
+        // it so the homing run starts with a clean "no reason yet" state.
+        lastStopReason_ = StopReason::None;
 
         isHomed_ = false;
         homingPhase_ = HomingPhase::Running;
@@ -538,6 +608,7 @@ namespace motor {
                 // Latch the sticky flag so the host can observe the stop
                 // after the FSM's auto-clear has returned us to Idle.
                 wasLimitHit_ = true;
+                lastStopReason_ = StopReason::LimitHit;
                 // Drive the homing strategy before returning — it may want
                 // to act on this LimitReached event this very tick.
                 serviceHoming(nowMs);
@@ -554,15 +625,19 @@ namespace motor {
             decelerating_ = false;
             portEXIT_CRITICAL(&g_motorMux);
             fsm_.requestTargetReached();
+            lastStopReason_ = StopReason::TargetReached;
         }
 
-        // Detect stepper auto-stop (ramp reached zero inside ISR)
+        // Detect stepper auto-stop (ramp reached zero inside ISR). This
+        // path runs when stop() was called and the deceleration ramp has
+        // finished — the user-stop completion case.
         if (stepper_.consumeAutoStop() && fsm_.isMoving()) {
             portENTER_CRITICAL(&g_motorMux);
             hasTarget_ = false;
             decelerating_ = false;
             portEXIT_CRITICAL(&g_motorMux);
             fsm_.requestStop();
+            lastStopReason_ = StopReason::UserStop;
         }
 
         // Drive the homing strategy in-phase with the FSM transitions it
@@ -631,6 +706,7 @@ namespace motor {
             portEXIT_CRITICAL(&g_motorMux);
         }
         fsm_.requestStallDetected();
+        lastStopReason_ = StopReason::Stall;
     }
 
     void LocalMotor::serviceMoving() {
@@ -657,6 +733,7 @@ namespace motor {
             decelerating_ = false;
             portEXIT_CRITICAL(&g_motorMux);
             fsm_.requestTargetReached();
+            lastStopReason_ = StopReason::TargetReached;
             return;
         }
 
