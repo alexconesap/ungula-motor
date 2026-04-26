@@ -164,19 +164,24 @@ namespace tmc {
         pwmconf_ = readRegister(reg::PWMCONF);
         iholdrun_ = readRegister(reg::IHOLD_IRUN);
 
-        // Apply sensible defaults — host only overrides what differs
-        setToff(defaults::TOFF);
-        setBlankTime(defaults::BLANK_TIME);
-        setPwmAutoscale(defaults::PWM_AUTOSCALE);
-        setSpreadCycle(defaults::SPREAD_CYCLE);
-        setPdnDisable(defaults::PDN_DISABLE);
-        setIScaleAnalog(defaults::ISCALE_ANALOG);
-        setInternalRsense(defaults::INTERNAL_RSENSE);
-        setInterpol(defaults::INTERPOL);
-        setMicrosteps(defaults::MICROSTEPS);
-        setIholddelay(defaults::IHOLDDELAY);
-        setTpowerdown(defaults::TPOWERDOWN);
-        setRunCurrent(defaults::RUN_CURRENT_MA, defaults::HOLD_FRACTION);
+        // Apply init parameters from config_ — host overrides defaults via setConfig()
+        setToff(config_.toff);
+        setBlankTime(config_.blankTime);
+        setHstrt(config_.hstrt);
+        setHend(config_.hend);
+        setPwmAutoscale(config_.pwmAutoscale);
+        setPwmAutograd(config_.pwmAutograd);
+        setSpreadCycle(config_.spreadCycle);
+        setPdnDisable(config_.pdnDisable);
+        setIScaleAnalog(config_.iScaleAnalog);
+        setInternalRsense(config_.internalRsense);
+        setInterpol(config_.interpol);
+        setMicrosteps(config_.microsteps);
+        setIholddelay(config_.iholddelay);
+        setTpowerdown(config_.tpowerdown);
+        setTpwmthrs(config_.tpwmthrs);
+        holdFraction_ = config_.holdFraction;
+        setRunCurrent(config_.runCurrentMa, config_.holdFraction);
 
         // When DIAG pin is configured, set up StallGuard4 registers
         if (diagPin_ != motor::GPIO_NONE) {
@@ -239,6 +244,16 @@ namespace tmc {
     void Tmc2209::setBlankTime(uint8_t blankTime) {
         setField(chopconf_, reg::CHOPCONF, chop::TBL_MASK,
                  static_cast<uint32_t>(blankTime & 0x03U) << chop::TBL_SHIFT);
+    }
+
+    void Tmc2209::setHstrt(uint8_t hstrt) {
+        setField(chopconf_, reg::CHOPCONF, chop::HSTRT_MASK,
+                 static_cast<uint32_t>(hstrt & 0x07U) << chop::HSTRT_SHIFT);
+    }
+
+    void Tmc2209::setHend(uint8_t hend) {
+        setField(chopconf_, reg::CHOPCONF, chop::HEND_MASK,
+                 static_cast<uint32_t>(hend & 0x0FU) << chop::HEND_SHIFT);
     }
 
     void Tmc2209::setMicrosteps(uint16_t microsteps) {

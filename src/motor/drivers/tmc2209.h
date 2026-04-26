@@ -157,21 +157,59 @@ namespace tmc {
     }  // namespace drv
 
     // ---- Sensible defaults applied by begin() ----
+    //
+    // These match the historic working profile of the OLD basic_motor stack
+    // (TMCStepper-based): SpreadCycle always on for stable torque under load,
+    // tight chopper hysteresis (HSTRT=5/HEND=2), TBL=2 (36 clocks), 30% hold.
+    //
+    // Host projects override per-field via Tmc2209::Config + setConfig()
+    // before begin(). Other applications that want StealthChop, looser
+    // hysteresis, etc. can flip individual fields without touching this header.
     namespace defaults {
         constexpr uint8_t TOFF = 5;
         constexpr uint16_t MICROSTEPS = 16;
         constexpr uint16_t RUN_CURRENT_MA = 1000;
-        constexpr float HOLD_FRACTION = 0.5F;
-        constexpr bool PWM_AUTOSCALE = true;
-        constexpr bool SPREAD_CYCLE = false;
+        constexpr float HOLD_FRACTION = 0.30F;
+        constexpr bool PWM_AUTOSCALE = false;
+        constexpr bool PWM_AUTOGRAD = false;
+        constexpr bool SPREAD_CYCLE = true;
         constexpr bool PDN_DISABLE = true;
         constexpr bool ISCALE_ANALOG = false;
         constexpr bool INTERNAL_RSENSE = false;
-        constexpr uint8_t BLANK_TIME = 1;  // TBL=1 → 24 clocks (matches TMCStepper blank_time(24))
+        constexpr uint8_t BLANK_TIME = 2;  // TBL=2 → 36 clocks
+        constexpr uint8_t HSTRT = 5;       // CHOPCONF HSTRT (0..7)
+        constexpr uint8_t HEND = 2;        // CHOPCONF HEND  (0..15)
         constexpr bool INTERPOL = true;
         constexpr uint8_t IHOLDDELAY = 10;
         constexpr uint8_t TPOWERDOWN = 20;
+        constexpr uint32_t TPWMTHRS = 0;  // 0 = StealthChop never auto-engages
     }  // namespace defaults
+
+    /// @brief Driver init parameters applied by begin().
+    ///
+    /// Defaults match the OLD basic_motor profile (SpreadCycle, tight
+    /// hysteresis, 30% hold). Host projects override per field before
+    /// begin() via Tmc2209::setConfig(). Anything not touched keeps
+    /// the default value above.
+    struct Config {
+            uint8_t toff = defaults::TOFF;
+            uint16_t microsteps = defaults::MICROSTEPS;
+            uint16_t runCurrentMa = defaults::RUN_CURRENT_MA;
+            float holdFraction = defaults::HOLD_FRACTION;
+            bool pwmAutoscale = defaults::PWM_AUTOSCALE;
+            bool pwmAutograd = defaults::PWM_AUTOGRAD;
+            bool spreadCycle = defaults::SPREAD_CYCLE;
+            bool pdnDisable = defaults::PDN_DISABLE;
+            bool iScaleAnalog = defaults::ISCALE_ANALOG;
+            bool internalRsense = defaults::INTERNAL_RSENSE;
+            uint8_t blankTime = defaults::BLANK_TIME;
+            uint8_t hstrt = defaults::HSTRT;
+            uint8_t hend = defaults::HEND;
+            bool interpol = defaults::INTERPOL;
+            uint8_t iholddelay = defaults::IHOLDDELAY;
+            uint8_t tpowerdown = defaults::TPOWERDOWN;
+            uint32_t tpwmthrs = defaults::TPWMTHRS;
+    };
 
     // ---- TCOOLTHRS calculation constants ----
     constexpr float TMC_FCLK = 12000000.0F;
@@ -326,6 +364,8 @@ namespace tmc {
             void setInternalRsense(bool enable);
             void setToff(uint8_t offTime);
             void setBlankTime(uint8_t blankTime);
+            void setHstrt(uint8_t hstrt);
+            void setHend(uint8_t hend);
             void setSpreadCycle(bool enable);
             void setPdnDisable(bool disable);
             void setIScaleAnalog(bool enable);
@@ -339,6 +379,17 @@ namespace tmc {
             void setTcoolthrs(uint32_t threshold);
             void setStallGuardThreshold(uint8_t threshold);
 
+            /// @brief Override the init parameters applied by begin().
+            /// Call before begin(). Fields not touched keep their default
+            /// value (see tmc::defaults). After begin() the same fields can
+            /// still be changed individually with the per-field setters.
+            void setConfig(const Config& config) {
+                config_ = config;
+            }
+            const Config& config() const {
+                return config_;
+            }
+
         private:
             static constexpr uint8_t INFO_BUF_SIZE = 48;
 
@@ -351,6 +402,7 @@ namespace tmc {
             uint8_t address_;
             char infoBuf_[INFO_BUF_SIZE] = {};
             float holdFraction_ = defaults::HOLD_FRACTION;
+            Config config_{};
 
             // Cached register values — avoids read-modify-write round-trips
             uint32_t gconf_ = 0;
