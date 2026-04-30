@@ -156,6 +156,21 @@ namespace tmc {
         constexpr uint32_t STANDSTILL = 1U << 31;
     }  // namespace drv
 
+    // ---- Datasheet reset values for the cached registers ----
+    //
+    // begin() seeds the local register cache with these BEFORE applying
+    // any host setting. Reading them back from the chip is best-effort —
+    // single-wire UART can fail silently, and a read that returns 0
+    // would otherwise zero-out fields we never touch (PWM_OFS, PWM_FREQ,
+    // PWM_REG, PWM_LIM, multistep_filt …) the next time we write the
+    // register. Seeding from the datasheet preserves those fields.
+    namespace reset {
+        constexpr uint32_t GCONF       = 0x00000101;  // I_scale_analog=1, multistep_filt=1
+        constexpr uint32_t CHOPCONF    = 0x10000053;  // TOFF=3, TBL=2, HEND=0, MRES=0, intpol=0
+        constexpr uint32_t PWMCONF     = 0xC10D0024;  // PWM_OFS=0x24, PWM_FREQ=1, autoscale=1, autograd=1, PWM_REG=1, PWM_LIM=0xC
+        constexpr uint32_t IHOLD_IRUN  = 0x00071703;  // IHOLD=3, IRUN=23, IHOLDDELAY=7
+    }  // namespace reset
+
     // ---- Sensible defaults applied by begin() ----
     //
     // These match the historic working profile of the OLD basic_motor stack
@@ -349,6 +364,11 @@ namespace tmc {
             void writeRegister(uint8_t regAddr, uint32_t value);
             uint32_t readRegister(uint8_t regAddr);
             static uint8_t calcCrc(const uint8_t* data, uint8_t length);
+
+            /// @brief Read every config register and emit them on the
+            /// logger. Use to compare driver state between firmware
+            /// versions on the same hardware.
+            void dumpRegisters(const char* tag);
 
             /// @brief Read StallGuard result from dedicated register 0x41.
             uint16_t readStallGuardResult();

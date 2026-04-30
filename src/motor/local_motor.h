@@ -138,6 +138,34 @@ namespace motor {
             /// calls driver.setRunCurrent() at each startMotion / updateSpeed.
             void setCurrentCurveEnabled(bool enabled);
 
+            /// @brief What to do with the driver when the motor is idle
+            /// (after motion ends, or after enable() before the first move).
+            ///
+            /// AutoDisable    — drop the EN pin. Coils freewheel. Chopper goes
+            ///                  silent. No holding torque from the driver.
+            ///                  Mechanical (leadscrew, brake, gravity, friction)
+            ///                  must hold the load. Matches the OLD basic_motor
+            ///                  stack. **Default.**
+            /// HoldCurrent    — keep EN low. Coils stay energised at IHOLD.
+            ///                  Active holding torque, but the chopper continues
+            ///                  to switch — usually quiet on bigger motors,
+            ///                  audible on small low-inductance coils.
+            ///
+            /// Pick AutoDisable when the mechanics hold the load on their own
+            /// (most leadscrew axes, geared drives, anything non-backdrivable).
+            /// Pick HoldCurrent when you need active torque at standstill
+            /// (direct-drive vertical axes, belts under tension, etc.).
+            enum class IdleMode {
+                AutoDisable,
+                HoldCurrent,
+            };
+            void setIdleMode(IdleMode mode) {
+                idleMode_ = mode;
+            }
+            IdleMode idleMode() const {
+                return idleMode_;
+            }
+
             /// @brief Set conversion factor for mm-based units.
             void setStepsPerMm(float stepsPerMm);
 
@@ -269,6 +297,10 @@ namespace motor {
 
             // Stall policy (detection is in the driver, policy is here)
             bool autoStopOnStall_ = false;
+
+            // Idle behaviour: AutoDisable matches OLD basic_motor (and is what
+            // every existing nicky firmware was tested against).
+            IdleMode idleMode_ = IdleMode::AutoDisable;
 
             // Speed→current curve. Off by default — opt-in via setCurrentCurveEnabled.
             CurrentCurve currentCurve_ = {};

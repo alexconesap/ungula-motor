@@ -8,20 +8,20 @@
 #include <cstdint>
 #include "motor_types.h"
 
-/// @brief Autonomous step pulse generator with internal ramp timer.
+/// @brief Step pulse generator + acceleration ramp service.
 ///
 /// Manages an ESP-IDF gptimer for step pulses (ISR toggles the pin and
-/// counts position) plus an esp_timer for the acceleration ramp (~10 ms).
-///
-/// No external service() call is needed — once started, the motor runs
-/// autonomously until it reaches the target speed (or zero on stop).
+/// counts position). The acceleration ramp is *not* run on its own timer —
+/// the host calls serviceRamp(nowMs) periodically (e.g. from LocalMotor's
+/// 10 ms service tick). One task owns ramp + alarm reconfig, eliminating
+/// cross-task races against gptimer_set_alarm_action() and uneven update
+/// cadence under main-loop ADC bursts (PID, fan tach, etc.).
 ///
 /// ## Concurrency model
 ///
-/// Three execution contexts share mutable state:
+/// Two execution contexts share mutable state:
 ///   1. Step ISR (gptimer, hardware interrupt) — toggles pin, counts position
-///   2. Ramp timer (esp_timer task) — computes acceleration ramp, updates speed
-///   3. Caller (any task/context) — configures speed, starts/stops motion
+///   2. Caller — serviceRamp(), setSpeed(), start/stop()
 ///
 /// All multi-field writes and reads are protected by a portMUX spinlock
 /// (portENTER_CRITICAL / portENTER_CRITICAL_ISR). Single 32-bit aligned
@@ -115,18 +115,24 @@ namespace motor {
             /// Do not call from application code.
             void handleStepIsr();
 
-            /// @brief Ramp timer handler — called from internal esp_timer.
-            /// Do not call from application code.
-            void handleRampTimer();
+            /// @brief Acceleration ramp service. Call from a periodic context
+            /// (LocalMotor calls this from its 10 ms service tick). Computes
+            /// the next currentSps_ from the configured target/accel/decel
+            /// using the actual elapsed time since the previous call, then
+            /// reapplies the gptimer alarm period if the ticks changed.
+            ///
+            /// Robust against irregular call cadence — the actual dt is
+            /// measured per call, so a delayed-then-catch-up pattern
+            /// still produces correct cumulative speed (won't overshoot
+            /// like a fixed-dt scheme would).
+            void serviceRamp(uint32_t nowMs);
 
         private:
             // Hardware timer for step pulses (opaque, cast to gptimer_handle_t)
             void* stepTimerHandle_ = nullptr;
 
-            // Software timer for ramp updates (opaque, cast to esp_timer_handle_t)
-            void* rampTimerHandle_ = nullptr;
-
             uint8_t stepPin_ = GPIO_NONE;
+            uint32_t lastRampMs_ = 0;  // tracks dt across serviceRamp() calls
 
             // ISR-shared state (volatile)
             volatile bool stepPinState_ = false;

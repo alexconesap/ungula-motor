@@ -64,20 +64,27 @@ namespace motor {
         }
     }
 
-    // ---- Ramp timer callback (esp_timer task context — NOT ISR) ----
+    // ---- Ramp service (caller's task context — NOT ISR) ----
     //
-    // Runs every ~10 ms. Computes the next speed on the acceleration ramp
-    // and updates the step timer alarm period. Separate from the step ISR
-    // so the ISR stays minimal (toggle + count only) and we avoid placing
-    // float math or gptimer API calls in IRAM.
+    // Called by the host on a periodic tick (LocalMotor's 10 ms service).
+    // Single-task ownership of ramp + alarm reconfig — no cross-task race
+    // against gptimer_set_alarm_action(). Uses measured dt instead of a
+    // fixed RAMP_SERVICE_MS so an irregular call cadence (e.g. when the
+    // main loop is mid-ADC burst) still produces correct cumulative
+    // speed.
 
-    static void onRampTimer(void* arg) {
-        static_cast<StepGenerator*>(arg)->handleRampTimer();
-    }
-
-    void StepGenerator::handleRampTimer() {
+    void StepGenerator::serviceRamp(uint32_t nowMs) {
         if (!running_) {
+            // Re-arm the dt baseline so the first tick after start uses
+            // a sensible delta (whatever start() sets, typically 0).
+            lastRampMs_ = nowMs;
             return;
+        }
+
+        uint32_t dtMs = nowMs - lastRampMs_;
+        lastRampMs_ = nowMs;
+        if (dtMs == 0) {
+            return;  // called twice in the same ms — nothing to integrate
         }
 
         // Snapshot shared state under lock, then compute outside critical section
@@ -88,7 +95,7 @@ namespace motor {
         float snapCurrent = currentSps_;
         portEXIT_CRITICAL(&g_stepMux);
 
-        updateRamp(step::RAMP_SERVICE_MS, snapTarget, snapAccel, snapDecel, snapCurrent);
+        updateRamp(dtMs, snapTarget, snapAccel, snapDecel, snapCurrent);
 
         uint32_t newTicks = computeAlarmTicks();
         if (newTicks != lastAppliedTicks_) {
@@ -165,40 +172,15 @@ namespace motor {
             return false;
         }
 
-        // Ramp timer — periodic esp_timer for acceleration updates.
-        // Runs in esp_timer task (high priority, not ISR context).
-        esp_timer_create_args_t rampArgs = {};
-        rampArgs.callback = &onRampTimer;
-        rampArgs.arg = this;
-        rampArgs.name = "step_ramp";
-        rampArgs.dispatch_method = ESP_TIMER_TASK;
-
-        esp_timer_handle_t rampHandle = nullptr;
-        if (esp_timer_create(&rampArgs, &rampHandle) != ESP_OK) {
-            end();
-            return false;
-        }
-        rampTimerHandle_ = rampHandle;
-
-        if (esp_timer_start_periodic(rampHandle, step::RAMP_SERVICE_US) != ESP_OK) {
-            esp_timer_delete(rampHandle);
-            rampTimerHandle_ = nullptr;
-            end();
-            return false;
-        }
+        // Ramp service is now driven by the host (LocalMotor) via
+        // serviceRamp(nowMs) — no internal esp_timer task. Single owner
+        // for ramp + alarm reconfig avoids cross-task races and uneven
+        // cadence under main-loop ADC bursts.
 
         return true;
     }
 
     void StepGenerator::end() {
-        // Stop ramp timer first
-        if (rampTimerHandle_ != nullptr) {
-            esp_timer_handle_t rampHandle = static_cast<esp_timer_handle_t>(rampTimerHandle_);
-            esp_timer_stop(rampHandle);
-            esp_timer_delete(rampHandle);
-            rampTimerHandle_ = nullptr;
-        }
-
         // Stop step timer
         if (stepTimerHandle_ != nullptr) {
             gptimer_handle_t handle = static_cast<gptimer_handle_t>(stepTimerHandle_);

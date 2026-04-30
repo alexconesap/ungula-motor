@@ -206,12 +206,32 @@ namespace motor {
     // IMotor — enable / disable
     // ============================================================
 
+    // Helper used at every motion-end transition and at idle: implements
+    // the per-host idle policy chosen with LocalMotor::setIdleMode().
+    static inline void parkDriverForIdle(motor::IMotorDriver* drv,
+                                         motor::LocalMotor::IdleMode mode) {
+        if (mode == motor::LocalMotor::IdleMode::AutoDisable) {
+            drv->disable();
+        }
+        // HoldCurrent: leave EN low so coils stay energised at IHOLD.
+    }
+
     void LocalMotor::enable() {
         if (fsm_.state() != MotorFsmState::Disabled) {
             return;
         }
-        driver_->enable();
+        // Idle EN-pin policy is host-configurable via setIdleMode().
+        // AutoDisable (default, matches OLD basic_motor): EN HIGH at idle.
+        // HoldCurrent: EN LOW at idle so the chip holds at IHOLD.
+        if (idleMode_ == IdleMode::AutoDisable) {
+            parkDriverForIdle(driver_, idleMode_);
+        } else {
+            driver_->enable();
+        }
         fsm_.requestEnable();
+        // Pre-park current at the curve floor so when motion starts
+        // the first applyCurrentForSpeed sees a known IRUN/IHOLD.
+        applyCurrentForSpeed(0);
     }
 
     void LocalMotor::disable() {
@@ -365,6 +385,8 @@ namespace motor {
         if (!internalMotionFromHoming_) {
             lastStopReason_ = StopReason::EmergencyStop;
         }
+        applyCurrentForSpeed(0);
+        parkDriverForIdle(driver_, idleMode_);
     }
 
     // ============================================================
@@ -557,6 +579,12 @@ namespace motor {
 
         // Update limit switches (debounce polling)
         int64_t nowMs = ungula::TimeControl::syncNow();
+
+        // Drive the step-pulse acceleration ramp from this single service
+        // tick — keeps ramp updates and gptimer alarm reconfig in one task.
+        // Avoids the cross-task race that produced chunky stepping when the
+        // main loop was mid-ADC burst on RBB2.
+        stepper_.serviceRamp(static_cast<uint32_t>(nowMs));
         for (int32_t idx = 0; idx < backwardLimitCount_; idx++) {
             limitsBackward_[idx].update(nowMs);
         }
@@ -609,6 +637,8 @@ namespace motor {
                 // after the FSM's auto-clear has returned us to Idle.
                 wasLimitHit_ = true;
                 lastStopReason_ = StopReason::LimitHit;
+                // Honour the host-configured idle policy.
+                parkDriverForIdle(driver_, idleMode_);
                 // Drive the homing strategy before returning — it may want
                 // to act on this LimitReached event this very tick.
                 serviceHoming(nowMs);
@@ -626,6 +656,11 @@ namespace motor {
             portEXIT_CRITICAL(&g_motorMux);
             fsm_.requestTargetReached();
             lastStopReason_ = StopReason::TargetReached;
+            // Match OLD basic_motor behaviour: disable EN at every motion
+            // end so the chopper stops and coils freewheel — silent at
+            // standstill, no heating.
+            applyCurrentForSpeed(0);
+            parkDriverForIdle(driver_, idleMode_);
         }
 
         // Detect stepper auto-stop (ramp reached zero inside ISR). This
@@ -638,6 +673,8 @@ namespace motor {
             portEXIT_CRITICAL(&g_motorMux);
             fsm_.requestStop();
             lastStopReason_ = StopReason::UserStop;
+            applyCurrentForSpeed(0);
+            parkDriverForIdle(driver_, idleMode_);
         }
 
         // Drive the homing strategy in-phase with the FSM transitions it
@@ -800,6 +837,13 @@ namespace motor {
 
     void LocalMotor::startMotion(int32_t speedSps, uint32_t accelMs, uint32_t decelMs) {
         decelerating_ = false;
+
+        // Re-energise the driver. The lib auto-disables EN at every
+        // motion-end (mirrors OLD basic_motor behaviour) so coils
+        // freewheel at standstill and the chopper stays silent. Each
+        // new motion has to switch EN back on before stepping. Idempotent
+        // when the driver is already enabled.
+        driver_->enable();
 
         // Tell the driver to prepare stall detection for this motion
         driver_->prepareStallDetection(speedSps, accelMs);

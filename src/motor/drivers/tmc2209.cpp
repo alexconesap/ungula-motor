@@ -3,6 +3,7 @@
 // See LICENSE file for details.
 
 #include "tmc2209.h"
+#include <emblogx/logger.h>
 #include <hal/gpio/gpio_access.h>
 #include <time/time_control.h>
 #include <cassert>
@@ -157,12 +158,34 @@ namespace tmc {
         // Clear global status flags (write 1 to clear)
         writeRegister(reg::GSTAT, GSTAT_CLEAR_ALL);
 
-        // Sync register cache — if UART doesn't respond, all return 0,
-        // that's fine because we set all fields explicitly below.
-        gconf_ = readRegister(reg::GCONF);
-        chopconf_ = readRegister(reg::CHOPCONF);
-        pwmconf_ = readRegister(reg::PWMCONF);
-        iholdrun_ = readRegister(reg::IHOLD_IRUN);
+        // Seed register cache with datasheet reset values. Reading them
+        // back is best-effort — a UART RX failure returns 0, which would
+        // then propagate into every subsequent setter that does
+        // read-modify-write and silently zero fields we never touch
+        // (PWM_OFS, PWM_FREQ, PWM_REG, PWM_LIM, multistep_filt …).
+        // Starting from datasheet defaults keeps untouched fields valid
+        // even when the chip never replies.
+        gconf_ = reset::GCONF;
+        chopconf_ = reset::CHOPCONF;
+        pwmconf_ = reset::PWMCONF;
+        iholdrun_ = reset::IHOLD_IRUN;
+
+        // Try to refresh from the chip — if any read succeeds, prefer
+        // that. Failing reads (return 0) leave the cache at the seeded
+        // defaults. We treat 0 as "read failed" because no real config
+        // ever results in a fully-zero GCONF/CHOPCONF/PWMCONF here.
+        uint32_t r = readRegister(reg::GCONF);
+        if (r != 0)
+            gconf_ = r;
+        r = readRegister(reg::CHOPCONF);
+        if (r != 0)
+            chopconf_ = r;
+        r = readRegister(reg::PWMCONF);
+        if (r != 0)
+            pwmconf_ = r;
+        r = readRegister(reg::IHOLD_IRUN);
+        if (r != 0)
+            iholdrun_ = r;
 
         // Apply init parameters from config_ — host overrides defaults via setConfig()
         setToff(config_.toff);
@@ -192,6 +215,10 @@ namespace tmc {
         // Build info string after init so version() reads the real IC value
         snprintf(infoBuf_, INFO_BUF_SIZE, "TMC2209 v0x%02X @ UART%u addr=%u", version(),
                  uart_.port(), address_);
+
+        // Post-init register snapshot — diff this against OLD basic_motor's
+        // post-init dump to find any silent register-write divergence.
+        dumpRegisters("post-begin");
     }
 
     void Tmc2209::setRunCurrent(uint16_t milliAmps) {
@@ -372,6 +399,43 @@ namespace tmc {
     }
     uint32_t Tmc2209::clearGstat() {
         return readRegister(reg::GSTAT);
+    }
+
+    void Tmc2209::dumpRegisters(const char* tag) {
+        // Read every register relevant to motor behaviour. Each line is
+        // self-contained so it can be diffed against an OLD-firmware dump.
+        uint32_t gconf = readRegister(reg::GCONF);
+        uint32_t gstat = readRegister(reg::GSTAT);
+        uint32_t ifcnt = readRegister(reg::IFCNT);
+        uint32_t ioin = readRegister(reg::IOIN);
+        uint32_t iholdrun = readRegister(reg::IHOLD_IRUN);
+        uint32_t tpowerdown = readRegister(reg::TPOWERDOWN);
+        uint32_t tpwmthrs = readRegister(reg::TPWMTHRS);
+        uint32_t tcoolthrs = readRegister(reg::TCOOLTHRS);
+        uint32_t sgthrs = readRegister(reg::SGTHRS);
+        uint32_t coolconf = readRegister(reg::COOLCONF);
+        uint32_t chopconf = readRegister(reg::CHOPCONF);
+        uint32_t drvstatus = readRegister(reg::DRV_STATUS);
+        uint32_t pwmconf = readRegister(reg::PWMCONF);
+
+        log_info_force_m("tmc", "[%s] GCONF=0x%08lX GSTAT=0x%08lX IFCNT=0x%08lX IOIN=0x%08lX", tag,
+                         (unsigned long)gconf, (unsigned long)gstat, (unsigned long)ifcnt,
+                         (unsigned long)ioin);
+        log_info_force_m(
+                "tmc",
+                "[%s] IHOLD_IRUN=0x%08lX TPOWERDOWN=0x%08lX TPWMTHRS=0x%08lX TCOOLTHRS=0x%08lX",
+                tag, (unsigned long)iholdrun, (unsigned long)tpowerdown, (unsigned long)tpwmthrs,
+                (unsigned long)tcoolthrs);
+        log_info_force_m("tmc",
+                         "[%s] SGTHRS=0x%08lX COOLCONF=0x%08lX CHOPCONF=0x%08lX PWMCONF=0x%08lX",
+                         tag, (unsigned long)sgthrs, (unsigned long)coolconf,
+                         (unsigned long)chopconf, (unsigned long)pwmconf);
+        log_info_force_m(
+                "tmc",
+                "[%s] DRV_STATUS=0x%08lX rSense=%.3fOhm cache: gconf=0x%08lX chopconf=0x%08lX "
+                "pwmconf=0x%08lX iholdrun=0x%08lX",
+                tag, (unsigned long)drvstatus, (double)rSense_, (unsigned long)gconf_,
+                (unsigned long)chopconf_, (unsigned long)pwmconf_, (unsigned long)iholdrun_);
     }
 
     uint16_t Tmc2209::readStallGuardResult() {
