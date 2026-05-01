@@ -69,7 +69,7 @@ namespace {
         CountingListener a, b, c;
         EXPECT_TRUE(pub.subscribe(&a));
         EXPECT_TRUE(pub.subscribe(&b));
-        EXPECT_FALSE(pub.subscribe(&c));    // capacity hit
+        EXPECT_FALSE(pub.subscribe(&c));  // capacity hit
         EXPECT_EQ(pub.listenerCount(), 2);
     }
 
@@ -101,17 +101,17 @@ namespace {
 
         pub.publish(make_event(MotorEventType::Stopped, 0));
         EXPECT_EQ(a.hits, 1);
-        EXPECT_EQ(b.hits, 0);   // unsubscribed
+        EXPECT_EQ(b.hits, 0);  // unsubscribed
         EXPECT_EQ(c.hits, 1);
     }
 
     TEST(MotorEventPublisherTest, UnsubscribeUnknownIsFalse) {
         MotorEventPublisher<4> pub;
         CountingListener a;
-        EXPECT_FALSE(pub.unsubscribe(&a));   // not registered yet
+        EXPECT_FALSE(pub.unsubscribe(&a));  // not registered yet
         pub.subscribe(&a);
         EXPECT_TRUE(pub.unsubscribe(&a));
-        EXPECT_FALSE(pub.unsubscribe(&a));   // already gone
+        EXPECT_FALSE(pub.unsubscribe(&a));  // already gone
     }
 
     TEST(MotorEventPublisherTest, ResubscribeAfterUnsubscribeWorks) {

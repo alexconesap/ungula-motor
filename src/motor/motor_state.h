@@ -43,27 +43,35 @@ namespace motor {
     /// `isIdle() && lastStopReason() == StopReason::TargetReached` long
     /// after the FSM itself has moved on to `Idle`.
     enum class StopReason : uint8_t {
-        None = 0,         /// No motion has run yet, or a new motion is in progress.
-        TargetReached,    /// Positional move completed cleanly.
-        UserStop,         /// `stop()` was called and the ramp finished.
-        LimitHit,         /// A limit switch fired during motion.
-        Stall,            /// Driver reported a stall during motion.
-        Fault,            /// Hardware fault was raised.
-        EmergencyStop,    /// `emergencyStop()` was called.
-        Disabled          /// `disable()` was called.
+        None = 0,       /// No motion has run yet, or a new motion is in progress.
+        TargetReached,  /// Positional move completed cleanly.
+        UserStop,       /// `stop()` was called and the ramp finished.
+        LimitHit,       /// A limit switch fired during motion.
+        Stall,          /// Driver reported a stall during motion.
+        Fault,          /// Hardware fault was raised.
+        EmergencyStop,  /// `emergencyStop()` was called.
+        Disabled        /// `disable()` was called.
     };
 
     /// @brief Human-readable stop-reason name (for logs / UI).
     inline const char* stopReasonName(StopReason reason) {
         switch (reason) {
-            case StopReason::None:           return "None";
-            case StopReason::TargetReached:  return "TargetReached";
-            case StopReason::UserStop:       return "UserStop";
-            case StopReason::LimitHit:       return "LimitHit";
-            case StopReason::Stall:          return "Stall";
-            case StopReason::Fault:          return "Fault";
-            case StopReason::EmergencyStop:  return "EmergencyStop";
-            case StopReason::Disabled:       return "Disabled";
+            case StopReason::None:
+                return "None";
+            case StopReason::TargetReached:
+                return "TargetReached";
+            case StopReason::UserStop:
+                return "UserStop";
+            case StopReason::LimitHit:
+                return "LimitHit";
+            case StopReason::Stall:
+                return "Stall";
+            case StopReason::Fault:
+                return "Fault";
+            case StopReason::EmergencyStop:
+                return "EmergencyStop";
+            case StopReason::Disabled:
+                return "Disabled";
         }
         return "Unknown";
     }

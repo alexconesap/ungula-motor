@@ -91,7 +91,7 @@ namespace {
         RemoteMotor m(sink, /*motorId=*/9);
 
         MotionProfileSpec spec{};
-        spec.startTimeMs = 1'700'000'000'000LL;   // post-int64 widening
+        spec.startTimeMs = 1'700'000'000'000LL;  // post-int64 widening
         spec.targetPosition = 12345;
         spec.maxVelocitySps = 4000;
         m.executeProfile(spec);
@@ -121,7 +121,7 @@ namespace {
         RecordingSink sink;
         RemoteMotor m(sink, 0);
         const MotorFsmState moving[] = {
-                MotorFsmState::WaitingStart, MotorFsmState::Starting,
+                MotorFsmState::WaitingStart,   MotorFsmState::Starting,
                 MotorFsmState::RunningForward, MotorFsmState::RunningBackward,
                 MotorFsmState::Decelerating,
         };
@@ -130,9 +130,8 @@ namespace {
             EXPECT_TRUE(m.isMoving()) << "state " << static_cast<int>(s);
         }
         const MotorFsmState still[] = {
-                MotorFsmState::Disabled,      MotorFsmState::Idle,
-                MotorFsmState::TargetReached, MotorFsmState::LimitReached,
-                MotorFsmState::Stall,         MotorFsmState::Fault,
+                MotorFsmState::Disabled,     MotorFsmState::Idle,  MotorFsmState::TargetReached,
+                MotorFsmState::LimitReached, MotorFsmState::Stall, MotorFsmState::Fault,
         };
         for (auto s : still) {
             m.updateState(s, 0);

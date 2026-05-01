@@ -118,8 +118,7 @@ namespace motor {
         // `Fault` are NOT cleared here — they require explicit
         // `clearStall()` / `clearFault()` so the host actively
         // acknowledges the condition.
-        if (state_ == MotorFsmState::TargetReached ||
-            state_ == MotorFsmState::LimitReached) {
+        if (state_ == MotorFsmState::TargetReached || state_ == MotorFsmState::LimitReached) {
             return transition(MotorFsmState::Idle, MotorEventType::StateChanged);
         }
         return false;

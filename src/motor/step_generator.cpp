@@ -330,8 +330,8 @@ namespace motor {
         if (sps < step::MIN_RUNNING_SPS) {
             return step::IDLE_ALARM_TICKS;
         }
-        uint32_t ticks = static_cast<uint32_t>(
-                static_cast<float>(step::TIMER_FREQ_HZ) / (sps * step::TOGGLES_PER_STEP));
+        uint32_t ticks = static_cast<uint32_t>(static_cast<float>(step::TIMER_FREQ_HZ) /
+                                               (sps * step::TOGGLES_PER_STEP));
         return (ticks < step::MIN_ALARM_TICKS) ? step::MIN_ALARM_TICKS : ticks;
     }
 

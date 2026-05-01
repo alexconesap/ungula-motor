@@ -339,10 +339,10 @@ namespace motor {
             // so the strategy's FSM polling is in-phase with the FSM
             // transitions it cares about (no main-loop polling race).
             enum class HomingPhase : uint8_t {
-                None,       /// Idle — no home() has been started.
-                Running,    /// begin() called, waiting for tick() to finish.
-                Done,       /// Last run finished successfully.
-                Failed      /// Last run was aborted or failed.
+                None,     /// Idle — no home() has been started.
+                Running,  /// begin() called, waiting for tick() to finish.
+                Done,     /// Last run finished successfully.
+                Failed    /// Last run was aborted or failed.
             };
 
             IHomingStrategy* homingStrategy_ = nullptr;

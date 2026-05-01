@@ -14,8 +14,8 @@
 
 namespace {
 
-    using motor::MotorCoordinator;
     using motor::MotorCommandType;
+    using motor::MotorCoordinator;
     using motor::MotorEvent;
     using motor::MotorEventType;
     using motor::MotorFsmState;
@@ -28,8 +28,8 @@ namespace {
     TEST(MotorCoordinatorTest, EmptyCoordinatorIsNoOp) {
         MotorCoordinator coord;
         EXPECT_EQ(coord.motorCount(), 0);
-        coord.enableAll();          // must not crash
-        coord.emergencyStopAll();   // must not crash
+        coord.enableAll();         // must not crash
+        coord.emergencyStopAll();  // must not crash
         EXPECT_EQ(coord.motor(0), nullptr);
     }
 
@@ -43,9 +43,8 @@ namespace {
         MotorCoordinator coord;
         RecordingSink sink;
         motor::RemoteMotor motors[motor::MAX_COORDINATOR_MOTORS + 1] = {
-                {sink, 0}, {sink, 1}, {sink, 2}, {sink, 3},
-                {sink, 4}, {sink, 5}, {sink, 6}, {sink, 7},
-                {sink, 8},
+                {sink, 0}, {sink, 1}, {sink, 2}, {sink, 3}, {sink, 4},
+                {sink, 5}, {sink, 6}, {sink, 7}, {sink, 8},
         };
         for (uint8_t i = 0; i < motor::MAX_COORDINATOR_MOTORS; ++i) {
             EXPECT_TRUE(coord.addMotor(&motors[i]));

@@ -155,18 +155,18 @@ namespace {
 
     TEST(MotorFsmTest, MoveForwardOnlyFromIdle) {
         Harness h;
-        EXPECT_FALSE(h.fsm.requestMoveForward());     // Disabled
+        EXPECT_FALSE(h.fsm.requestMoveForward());  // Disabled
         enable(h);
-        EXPECT_TRUE(h.fsm.requestMoveForward());      // Idle
+        EXPECT_TRUE(h.fsm.requestMoveForward());  // Idle
         EXPECT_EQ(h.fsm.state(), MotorFsmState::Starting);
-        EXPECT_FALSE(h.fsm.requestMoveForward());     // Starting
+        EXPECT_FALSE(h.fsm.requestMoveForward());  // Starting
     }
 
     TEST(MotorFsmTest, MoveBackwardOnlyFromIdle) {
         Harness h;
-        EXPECT_FALSE(h.fsm.requestMoveBackward());    // Disabled
+        EXPECT_FALSE(h.fsm.requestMoveBackward());  // Disabled
         enable(h);
-        EXPECT_TRUE(h.fsm.requestMoveBackward());     // Idle
+        EXPECT_TRUE(h.fsm.requestMoveBackward());  // Idle
         EXPECT_EQ(h.fsm.state(), MotorFsmState::Starting);
     }
 
@@ -175,7 +175,7 @@ namespace {
         enable(h);
         EXPECT_FALSE(h.fsm.requestRunning(Direction::FORWARD));  // Idle, no go
         ASSERT_TRUE(h.fsm.requestMoveForward());
-        EXPECT_TRUE(h.fsm.requestRunning(Direction::FORWARD));   // from Starting
+        EXPECT_TRUE(h.fsm.requestRunning(Direction::FORWARD));  // from Starting
         EXPECT_EQ(h.fsm.state(), MotorFsmState::RunningForward);
     }
 
@@ -193,12 +193,12 @@ namespace {
 
     TEST(MotorFsmTest, WaitStartFromIdleOnly) {
         Harness h;
-        EXPECT_FALSE(h.fsm.requestWaitStart());   // Disabled
+        EXPECT_FALSE(h.fsm.requestWaitStart());  // Disabled
         enable(h);
-        EXPECT_TRUE(h.fsm.requestWaitStart());    // Idle
+        EXPECT_TRUE(h.fsm.requestWaitStart());  // Idle
         EXPECT_EQ(h.fsm.state(), MotorFsmState::WaitingStart);
-        EXPECT_TRUE(h.fsm.isMoving());            // WaitingStart counts as moving
-        EXPECT_FALSE(h.fsm.requestWaitStart());   // Already in WaitingStart
+        EXPECT_TRUE(h.fsm.isMoving());           // WaitingStart counts as moving
+        EXPECT_FALSE(h.fsm.requestWaitStart());  // Already in WaitingStart
     }
 
     TEST(MotorFsmTest, StartingAcceptsIdleAndWaitingStart) {
@@ -221,9 +221,9 @@ namespace {
 
     TEST(MotorFsmTest, StartingRejectedFromMostStates) {
         Harness h;
-        EXPECT_FALSE(h.fsm.requestStarting());    // Disabled
+        EXPECT_FALSE(h.fsm.requestStarting());  // Disabled
         enterRunningForward(h);
-        EXPECT_FALSE(h.fsm.requestStarting());    // Running
+        EXPECT_FALSE(h.fsm.requestStarting());  // Running
     }
 
     // ------------------------------------------------------------------
@@ -257,9 +257,9 @@ namespace {
 
     TEST(MotorFsmTest, DecelerateRejectedFromStillStates) {
         Harness h;
-        EXPECT_FALSE(h.fsm.requestDecelerate());    // Disabled
+        EXPECT_FALSE(h.fsm.requestDecelerate());  // Disabled
         enable(h);
-        EXPECT_FALSE(h.fsm.requestDecelerate());    // Idle
+        EXPECT_FALSE(h.fsm.requestDecelerate());  // Idle
     }
 
     TEST(MotorFsmTest, StopFromMovingGoesToIdleWithStoppedEvent) {
@@ -317,9 +317,9 @@ namespace {
 
     TEST(MotorFsmTest, StopRejectedFromIdleAndDisabled) {
         Harness h;
-        EXPECT_FALSE(h.fsm.requestStop());          // Disabled
+        EXPECT_FALSE(h.fsm.requestStop());  // Disabled
         enable(h);
-        EXPECT_FALSE(h.fsm.requestStop());          // Idle
+        EXPECT_FALSE(h.fsm.requestStop());  // Idle
     }
 
     // ------------------------------------------------------------------
@@ -371,7 +371,7 @@ namespace {
         enable(h);
         EXPECT_FALSE(h.fsm.requestTargetReached());  // Idle
         ASSERT_TRUE(h.fsm.requestMoveForward());
-        EXPECT_TRUE(h.fsm.requestTargetReached());   // Starting
+        EXPECT_TRUE(h.fsm.requestTargetReached());  // Starting
         EXPECT_EQ(h.fsm.state(), MotorFsmState::TargetReached);
         EXPECT_EQ(h.listener.events.back().type, MotorEventType::TargetReached);
     }
@@ -379,7 +379,7 @@ namespace {
     TEST(MotorFsmTest, LimitHitRequiresMoving) {
         Harness h;
         enable(h);
-        EXPECT_FALSE(h.fsm.requestLimitHit());      // Idle
+        EXPECT_FALSE(h.fsm.requestLimitHit());  // Idle
         enterRunningForward(h);
         EXPECT_TRUE(h.fsm.requestLimitHit());
         EXPECT_EQ(h.fsm.state(), MotorFsmState::LimitReached);
@@ -400,18 +400,18 @@ namespace {
         // Fault is an external condition — accepted from anywhere except Disabled.
         {
             Harness h;
-            EXPECT_FALSE(h.fsm.requestFault());   // Disabled rejected
+            EXPECT_FALSE(h.fsm.requestFault());  // Disabled rejected
         }
         {
             Harness h;
             enable(h);
-            EXPECT_TRUE(h.fsm.requestFault());    // Idle accepted
+            EXPECT_TRUE(h.fsm.requestFault());  // Idle accepted
             EXPECT_EQ(h.fsm.state(), MotorFsmState::Fault);
         }
         {
             Harness h;
             enterRunningForward(h);
-            EXPECT_TRUE(h.fsm.requestFault());    // Running accepted
+            EXPECT_TRUE(h.fsm.requestFault());  // Running accepted
             EXPECT_EQ(h.fsm.state(), MotorFsmState::Fault);
         }
     }
@@ -422,9 +422,9 @@ namespace {
 
     TEST(MotorFsmTest, ClearStallOnlyFromStall) {
         Harness h;
-        EXPECT_FALSE(h.fsm.clearStall());    // Disabled
+        EXPECT_FALSE(h.fsm.clearStall());  // Disabled
         enable(h);
-        EXPECT_FALSE(h.fsm.clearStall());    // Idle
+        EXPECT_FALSE(h.fsm.clearStall());  // Idle
 
         enterRunningForward(h);
         ASSERT_TRUE(h.fsm.requestStallDetected());
@@ -434,9 +434,9 @@ namespace {
 
     TEST(MotorFsmTest, ClearFaultOnlyFromFault) {
         Harness h;
-        EXPECT_FALSE(h.fsm.clearFault());    // Disabled
+        EXPECT_FALSE(h.fsm.clearFault());  // Disabled
         enable(h);
-        EXPECT_FALSE(h.fsm.clearFault());    // Idle
+        EXPECT_FALSE(h.fsm.clearFault());  // Idle
 
         ASSERT_TRUE(h.fsm.requestFault());
         EXPECT_TRUE(h.fsm.clearFault());
@@ -480,36 +480,36 @@ namespace {
         // And six should NOT be: Disabled, Idle, TargetReached, LimitReached, Stall, Fault.
         {
             Harness h;
-            EXPECT_FALSE(h.fsm.isMoving());                  // Disabled
+            EXPECT_FALSE(h.fsm.isMoving());  // Disabled
         }
         {
             Harness h;
             enable(h);
-            EXPECT_FALSE(h.fsm.isMoving());                  // Idle
+            EXPECT_FALSE(h.fsm.isMoving());  // Idle
         }
         {
             Harness h;
             enterRunningForward(h);
             ASSERT_TRUE(h.fsm.requestTargetReached());
-            EXPECT_FALSE(h.fsm.isMoving());                  // TargetReached
+            EXPECT_FALSE(h.fsm.isMoving());  // TargetReached
         }
         {
             Harness h;
             enterRunningForward(h);
             ASSERT_TRUE(h.fsm.requestLimitHit());
-            EXPECT_FALSE(h.fsm.isMoving());                  // LimitReached
+            EXPECT_FALSE(h.fsm.isMoving());  // LimitReached
         }
         {
             Harness h;
             enterRunningForward(h);
             ASSERT_TRUE(h.fsm.requestStallDetected());
-            EXPECT_FALSE(h.fsm.isMoving());                  // Stall
+            EXPECT_FALSE(h.fsm.isMoving());  // Stall
         }
         {
             Harness h;
             ASSERT_TRUE(h.fsm.requestEnable());
             ASSERT_TRUE(h.fsm.requestFault());
-            EXPECT_FALSE(h.fsm.isMoving());                  // Fault
+            EXPECT_FALSE(h.fsm.isMoving());  // Fault
         }
     }
 
@@ -547,17 +547,17 @@ namespace {
     TEST(MotorFsmTest, FullForwardCycleProducesExpectedEventTrail) {
         Harness h;
         ASSERT_TRUE(h.fsm.requestEnable());
-        ASSERT_TRUE(h.fsm.requestMoveForward());      // → Starting
+        ASSERT_TRUE(h.fsm.requestMoveForward());  // → Starting
         ASSERT_TRUE(h.fsm.requestRunning(Direction::FORWARD));
         ASSERT_TRUE(h.fsm.requestDecelerate());
         ASSERT_TRUE(h.fsm.requestStop());
 
         ASSERT_EQ(h.listener.events.size(), 5U);
-        EXPECT_EQ(h.listener.events[0].type, MotorEventType::StateChanged);    // Enable
-        EXPECT_EQ(h.listener.events[1].type, MotorEventType::Started);         // Move
-        EXPECT_EQ(h.listener.events[2].type, MotorEventType::StateChanged);    // Running
-        EXPECT_EQ(h.listener.events[3].type, MotorEventType::StateChanged);    // Decel
-        EXPECT_EQ(h.listener.events[4].type, MotorEventType::Stopped);         // Stop
+        EXPECT_EQ(h.listener.events[0].type, MotorEventType::StateChanged);  // Enable
+        EXPECT_EQ(h.listener.events[1].type, MotorEventType::Started);       // Move
+        EXPECT_EQ(h.listener.events[2].type, MotorEventType::StateChanged);  // Running
+        EXPECT_EQ(h.listener.events[3].type, MotorEventType::StateChanged);  // Decel
+        EXPECT_EQ(h.listener.events[4].type, MotorEventType::Stopped);       // Stop
         EXPECT_EQ(h.fsm.state(), MotorFsmState::Idle);
     }
 
