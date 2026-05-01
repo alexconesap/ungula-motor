@@ -108,8 +108,8 @@ namespace motor {
 
             // ---- Status (optional, not all drivers support these) ----
 
-            /// @brief Read driver status register. Returns 0 if not supported.
-            virtual uint32_t drvStatus() {
+            /// @brief Returns last driver status register. Returns 0 if not supported.
+            virtual uint32_t lastDrvStatus() {
                 return 0;
             }
 

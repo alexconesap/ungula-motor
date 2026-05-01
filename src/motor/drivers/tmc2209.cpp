@@ -4,6 +4,8 @@
 
 #include "tmc2209.h"
 #include <emblogx/logger.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <hal/gpio/gpio_access.h>
 #include <time/time_control.h>
 #include <cassert>
@@ -11,9 +13,9 @@
 
 namespace tmc {
 
-    // ============================================================
+    //
     // CRC8 — polynomial 0x07, LSB-first per byte
-    // ============================================================
+    //
     uint8_t Tmc2209::calcCrc(const uint8_t* data, uint8_t length) {
         uint8_t crc = 0;
         for (uint8_t idx = 0; idx < length; idx++) {
@@ -30,10 +32,10 @@ namespace tmc {
         return crc;
     }
 
-    // ============================================================
+    //
     // Raw register write — 8-byte datagram
     // [sync] [addr] [reg|WRITE_FLAG] [d3] [d2] [d1] [d0] [crc]
-    // ============================================================
+    //
     void Tmc2209::writeRegister(uint8_t regAddr, uint32_t value) {
         uint8_t datagram[WRITE_DATAGRAM_LEN];
         datagram[0] = SYNC_BYTE;
@@ -45,6 +47,7 @@ namespace tmc {
         datagram[6] = static_cast<uint8_t>((value >> 0) & 0xFF);
         datagram[7] = calcCrc(datagram, WRITE_DATAGRAM_LEN - 1);
 
+        xSemaphoreTake(static_cast<SemaphoreHandle_t>(uartMutex_), portMAX_DELAY);
         uart_.flushInput();
         uart_.write(datagram, WRITE_DATAGRAM_LEN);
         uart_.flush();
@@ -54,14 +57,15 @@ namespace tmc {
         uart_.read(echo, WRITE_DATAGRAM_LEN, ECHO_TIMEOUT_MS);
 
         ungula::TimeControl::delayMs(INTER_DATAGRAM_MS);
+        xSemaphoreGive(static_cast<SemaphoreHandle_t>(uartMutex_));
     }
 
-    // ============================================================
+    //
     // Raw register read — send 4-byte request, receive 8-byte reply
     // Request: [sync] [addr] [reg] [crc]
     // Reply:   [sync] [0xFF] [reg] [d3] [d2] [d1] [d0] [crc]
     // On single-wire we also see our own 4-byte echo before the reply.
-    // ============================================================
+    //
     uint32_t Tmc2209::readRegister(uint8_t regAddr) {
         uint8_t request[READ_REQUEST_LEN];
         request[0] = SYNC_BYTE;
@@ -69,6 +73,7 @@ namespace tmc {
         request[2] = regAddr;
         request[3] = calcCrc(request, READ_REQUEST_LEN - 1);
 
+        xSemaphoreTake(static_cast<SemaphoreHandle_t>(uartMutex_), portMAX_DELAY);
         uart_.flushInput();
         uart_.write(request, READ_REQUEST_LEN);
         uart_.flush();
@@ -76,6 +81,8 @@ namespace tmc {
         // Read echo (4) + reply (8) with margin
         uint8_t buffer[READ_BUF_SIZE];
         int32_t bytesRead = uart_.read(buffer, sizeof(buffer), REPLY_TIMEOUT_MS);
+        xSemaphoreGive(static_cast<SemaphoreHandle_t>(uartMutex_));
+
         if (bytesRead < READ_REPLY_LEN) {
             return 0;
         }
@@ -100,9 +107,9 @@ namespace tmc {
         return 0;
     }
 
-    // ============================================================
+    //
     // Construction + initialization
-    // ============================================================
+    //
     Tmc2209::Tmc2209(ungula::uart::Uart& uart, float rSense, uint8_t stepPin, uint8_t enablePin,
                      uint8_t dirPin, uint8_t address)
         : uart_(uart),
@@ -149,6 +156,11 @@ namespace tmc {
     }
 
     void Tmc2209::begin() {
+        // Create UART mutex once. Safe to call multiple times (guard on null).
+        if (uartMutex_ == nullptr) {
+            uartMutex_ = xSemaphoreCreateMutex();
+        }
+
         // Configure GPIO pins owned by the driver
         ungula::gpio::configOutput(enablePin_);
         ungula::gpio::configOutput(dirPin_);
@@ -170,22 +182,24 @@ namespace tmc {
         pwmconf_ = reset::PWMCONF;
         iholdrun_ = reset::IHOLD_IRUN;
 
-        // Try to refresh from the chip — if any read succeeds, prefer
-        // that. Failing reads (return 0) leave the cache at the seeded
-        // defaults. We treat 0 as "read failed" because no real config
+        // We treat 0 as "read failed" because no real config
         // ever results in a fully-zero GCONF/CHOPCONF/PWMCONF here.
-        uint32_t r = readRegister(reg::GCONF);
-        if (r != 0)
-            gconf_ = r;
-        r = readRegister(reg::CHOPCONF);
-        if (r != 0)
-            chopconf_ = r;
-        r = readRegister(reg::PWMCONF);
-        if (r != 0)
-            pwmconf_ = r;
-        r = readRegister(reg::IHOLD_IRUN);
-        if (r != 0)
-            iholdrun_ = r;
+        uint32_t read = readRegister(reg::GCONF);
+        if (read != 0) {
+            gconf_ = read;
+        }
+        read = readRegister(reg::CHOPCONF);
+        if (read != 0) {
+            chopconf_ = read;
+        }
+        read = readRegister(reg::PWMCONF);
+        if (read != 0) {
+            pwmconf_ = read;
+        }
+        read = readRegister(reg::IHOLD_IRUN);
+        if (read != 0) {
+            iholdrun_ = read;
+        }
 
         // Apply init parameters from config_ — host overrides defaults via setConfig()
         setToff(config_.toff);
@@ -225,9 +239,9 @@ namespace tmc {
         setRunCurrent(milliAmps, holdFraction_);
     }
 
-    // ============================================================
+    //
     // Bit/field helpers — update cache, write full register
-    // ============================================================
+    //
     void Tmc2209::setBit(uint32_t& cache, uint8_t regAddr, uint32_t mask, bool value) {
         if (value) {
             cache |= mask;
@@ -242,9 +256,9 @@ namespace tmc {
         writeRegister(regAddr, cache);
     }
 
-    // ============================================================
+    //
     // GCONF configuration
-    // ============================================================
+    //
     void Tmc2209::setInternalRsense(bool enable) {
         setBit(gconf_, reg::GCONF, gconf::INTERNAL_RSENSE, enable);
     }
@@ -261,9 +275,9 @@ namespace tmc {
         setBit(gconf_, reg::GCONF, gconf::SHAFT, reverse);
     }
 
-    // ============================================================
+    //
     // CHOPCONF configuration
-    // ============================================================
+    //
     void Tmc2209::setToff(uint8_t offTime) {
         setField(chopconf_, reg::CHOPCONF, chop::TOFF_MASK, offTime & 0x0FU);
     }
@@ -297,9 +311,9 @@ namespace tmc {
         setBit(chopconf_, reg::CHOPCONF, chop::INTPOL, enable);
     }
 
-    // ============================================================
+    //
     // PWMCONF configuration
-    // ============================================================
+    //
     void Tmc2209::setPwmAutoscale(bool enable) {
         setBit(pwmconf_, reg::PWMCONF, pwm::AUTOSCALE, enable);
     }
@@ -307,9 +321,9 @@ namespace tmc {
         setBit(pwmconf_, reg::PWMCONF, pwm::AUTOGRAD, enable);
     }
 
-    // ============================================================
+    //
     // IHOLD_IRUN + current
-    // ============================================================
+    //
     void Tmc2209::setIholddelay(uint8_t holdDelay) {
         setField(iholdrun_, reg::IHOLD_IRUN, ihr::IHOLDDELAY_MASK,
                  static_cast<uint32_t>(holdDelay & 0x0FU) << ihr::IHOLDDELAY_SHIFT);
@@ -352,9 +366,9 @@ namespace tmc {
         writeRegister(reg::IHOLD_IRUN, iholdrun_);
     }
 
-    // ============================================================
+    //
     // Standalone register writes
-    // ============================================================
+    //
     void Tmc2209::setTpowerdown(uint8_t powerDelay) {
         writeRegister(reg::TPOWERDOWN, powerDelay);
     }
@@ -386,17 +400,18 @@ namespace tmc {
         setTcoolthrs(TCOOLTHRS_ALWAYS_ON);
     }
 
-    // ============================================================
+    //
     // Status reads
-    // ============================================================
+    //
     uint8_t Tmc2209::version() {
         uint32_t ioinReg = readRegister(reg::IOIN);
         return static_cast<uint8_t>((ioinReg >> ioin::VERSION_SHIFT) & 0xFF);
     }
 
-    uint32_t Tmc2209::drvStatus() {
-        return readRegister(reg::DRV_STATUS);
+    uint32_t Tmc2209::lastDrvStatus() {
+        return lastDrvStatus_;
     }
+
     uint32_t Tmc2209::clearGstat() {
         return readRegister(reg::GSTAT);
     }
@@ -418,24 +433,20 @@ namespace tmc {
         uint32_t drvstatus = readRegister(reg::DRV_STATUS);
         uint32_t pwmconf = readRegister(reg::PWMCONF);
 
-        log_info_force_m("tmc", "[%s] GCONF=0x%08lX GSTAT=0x%08lX IFCNT=0x%08lX IOIN=0x%08lX", tag,
-                         (unsigned long)gconf, (unsigned long)gstat, (unsigned long)ifcnt,
-                         (unsigned long)ioin);
+        log_info_force_m(module(), "[%s] GCONF=0x%08lX GSTAT=0x%08lX IFCNT=0x%08lX IOIN=0x%08lX",
+                         tag, gconf, gstat, ifcnt, ioin);
         log_info_force_m(
-                "tmc",
+                module(),
                 "[%s] IHOLD_IRUN=0x%08lX TPOWERDOWN=0x%08lX TPWMTHRS=0x%08lX TCOOLTHRS=0x%08lX",
-                tag, (unsigned long)iholdrun, (unsigned long)tpowerdown, (unsigned long)tpwmthrs,
-                (unsigned long)tcoolthrs);
-        log_info_force_m("tmc",
+                tag, iholdrun, tpowerdown, tpwmthrs, tcoolthrs);
+        log_info_force_m(module(),
                          "[%s] SGTHRS=0x%08lX COOLCONF=0x%08lX CHOPCONF=0x%08lX PWMCONF=0x%08lX",
-                         tag, (unsigned long)sgthrs, (unsigned long)coolconf,
-                         (unsigned long)chopconf, (unsigned long)pwmconf);
+                         tag, sgthrs, coolconf, chopconf, pwmconf);
         log_info_force_m(
-                "tmc",
+                module(),
                 "[%s] DRV_STATUS=0x%08lX rSense=%.3fOhm cache: gconf=0x%08lX chopconf=0x%08lX "
                 "pwmconf=0x%08lX iholdrun=0x%08lX",
-                tag, (unsigned long)drvstatus, (double)rSense_, (unsigned long)gconf_,
-                (unsigned long)chopconf_, (unsigned long)pwmconf_, (unsigned long)iholdrun_);
+                tag, drvstatus, rSense_, gconf_, chopconf_, pwmconf_, iholdrun_);
     }
 
     uint16_t Tmc2209::readStallGuardResult() {
@@ -444,9 +455,9 @@ namespace tmc {
         return static_cast<uint16_t>(raw & SG_RESULT_MASK);
     }
 
-    // ============================================================
+    //
     // Stall detection configuration
-    // ============================================================
+    //
 
     void Tmc2209::configureStall(const StallConfig& config) {
         diagPin_ = config.diagPin;
@@ -456,15 +467,20 @@ namespace tmc {
         stallDetector_.setSgBaselineCap(config.sgMaxBaseline);
         stallDetector_.setStallFraction(config.sgDropFraction);
         stallDetector_.setScoreLimit(config.sgConfirmCount);
+        log_info_force_m(module(),
+                         "Stall config: diagPin=%u sensitivity=%u diagConfirm=%ld sgSlope=%.2f "
+                         "sgMaxBaseline=%u sgDropFraction=%.2f sgConfirm=%ld",
+                         diagPin_, stallSensitivity_, config.diagConfirmCount, config.sgSlope,
+                         config.sgMaxBaseline, config.sgDropFraction, config.sgConfirmCount);
     }
 
     void Tmc2209::setStallSensitivity(uint8_t sensitivity) {
         stallSensitivity_ = sensitivity;
     }
 
-    // ============================================================
+    //
     // Stall detection lifecycle (IMotorDriver)
-    // ============================================================
+    //
 
     void Tmc2209::prepareStallDetection(int32_t speedSps, uint32_t accelMs) {
         stallDetector_.clear();
@@ -492,30 +508,35 @@ namespace tmc {
 
         uint32_t nowMs = ungula::TimeControl::syncNow();
 
-        // Always read SG_RESULT while motor is running (throttled to avoid
-        // UART blocking). Independent of blanking — short moves with long
-        // accel ramps would never get a reading otherwise.
-        if ((nowMs - lastSgPollMs_) >= motor::svc::SG_POLL_INTERVAL_MS) {
-            lastSgPollMs_ = nowMs;
-            lastSgResult_ = readStallGuardResult();
+        const bool blanking = (nowMs < stallBlankUntilMs_);
+        const bool lowSpeed = (targetSpeedSps_ < motor::stall::LOW_SPEED_SPS);
+
+        // UART poll — skipped during blanking. Each round-trip (2-4 ms) causes
+        // service-timer jitter that makes the acceleration ramp clunky, and the
+        // readings would be discarded by the scoring gates below anyway.
+        // Resumes the first tick after blanking expires.
+        if (!blanking) {
+            if ((nowMs - lastSgPollMs_) >= motor::svc::SG_POLL_INTERVAL_MS) {
+                lastSgPollMs_ = nowMs;
+                lastSgResult_ = readStallGuardResult();
+                lastDrvStatus_ = readRegister(reg::DRV_STATUS);
+            }
         }
 
-        // Stall scoring — only after blanking period expires
-        bool stallBlankActive = (nowMs < stallBlankUntilMs_);
-        if (stallBlankActive) {
-            return;
+        // DIAG pin — scored during and after blanking (GPIO read, zero UART cost).
+        // Suppressed only at low speed where back-EMF is too weak for reliable assertion.
+        // diagConfirmCount consecutive HIGH readings are needed to trigger — this
+        // naturally filters brief ramp transients while still catching a real hard-stop
+        // that keeps DIAG asserted for many service ticks.
+        if (diagPin_ != motor::GPIO_NONE && !lowSpeed) {
+            stallDetector_.pollPin(ungula::gpio::isHigh(diagPin_));
         }
 
-        bool lowSpeedMode = (targetSpeedSps_ < motor::stall::LOW_SPEED_SPS);
-
-        // Path 1: DIAG pin — suppressed at low speeds where it's unreliable
-        if (diagPin_ != motor::GPIO_NONE && !lowSpeedMode) {
-            bool diagHigh = ungula::gpio::isHigh(diagPin_);
-            stallDetector_.pollPin(diagHigh);
+        // SG_RESULT scoring — only after blanking. Readings during the ramp are
+        // noisy and would produce false scores.
+        if (!blanking) {
+            stallDetector_.pollRegister(lastSgResult_);
         }
-
-        // Path 2: SG_RESULT register — speed-scaled threshold, all speeds
-        stallDetector_.pollRegister(lastSgResult_);
     }
 
     bool Tmc2209::isStalling() const {
@@ -526,9 +547,9 @@ namespace tmc {
         stallDetector_.clear();
     }
 
-    // ============================================================
+    //
     // Stall detection helpers
-    // ============================================================
+    //
 
     // Reconfigure StallGuard registers for the target speed.
     // Sensitivity and TCOOLTHRS are speed-dependent.
@@ -552,9 +573,9 @@ namespace tmc {
         return static_cast<uint32_t>(tstep * TCOOLTHRS_MARGIN);
     }
 
-    // ============================================================
+    //
     // Helpers
-    // ============================================================
+    //
     uint8_t Tmc2209::mresFromMicrosteps(uint16_t microsteps) {
         switch (microsteps) {
             case 256:

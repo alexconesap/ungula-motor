@@ -28,10 +28,11 @@
 /// and return immediately. The motor handles everything internally:
 ///
 ///   - Step pulses: hardware timer ISR (GPTimer, zero jitter)
-///   - Acceleration ramp: computed inside the step ISR every ~10 ms
-///   - Safety monitoring: internal periodic timer (esp_timer, 10 ms)
-///     checks stall detection, limit switches, target position,
-///     and manages FSM transitions
+///   - Acceleration ramp: computed by the service timer (esp_timer task,
+///     10 ms) via StepGenerator::serviceRamp(). The step ISR only
+///     toggles the STEP pin and counts position.
+///   - Safety monitoring: same 10 ms service timer tick — stall
+///     detection, limit switches, target position, FSM transitions
 ///
 /// The caller is completely free between commands. No polling, no
 /// service() calls, no timing obligations. The main loop can handle

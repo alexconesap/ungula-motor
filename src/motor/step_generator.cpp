@@ -10,6 +10,7 @@
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/portmacro.h>
+#include <hal/gpio/gpio_access.h>
 
 namespace motor {
 
@@ -27,40 +28,49 @@ namespace motor {
     }
 
     void IRAM_ATTR StepGenerator::handleStepIsr() {
+        portENTER_CRITICAL_ISR(&g_stepMux);
+
         if (!running_) {
             stepPinState_ = false;
-            gpio_set_level(static_cast<gpio_num_t>(stepPin_), 0);
+            portEXIT_CRITICAL_ISR(&g_stepMux);
+            ungula::gpio::setLow(stepPin_);
             return;
         }
 
         stepPinState_ = !stepPinState_;
-        gpio_set_level(static_cast<gpio_num_t>(stepPin_), stepPinState_ ? 1 : 0);
+        const bool isHigh = stepPinState_;
 
-        // Count on rising edge (two toggles per full step)
-        if (stepPinState_) {
+        // Count on rising edge (two toggles per full step).
+        // Position increment and target check are one atomic block —
+        // prevents dual-core races where another core reads positionSteps_
+        // between the increment and the flag update.
+        if (isHigh) {
             if (directionFwd_) {
                 positionSteps_ = positionSteps_ + 1;
             } else {
                 positionSteps_ = positionSteps_ - 1;
             }
 
-            // ISR-level target check — single-step precision, zero overshoot.
-            // Stops immediately when position reaches (or passes) the target.
-            // Critical section protects multi-field write (running, hasTarget, targetReached)
-            // and ensures consistent read of targetPosition_ set by caller.
-            portENTER_CRITICAL_ISR(&g_stepMux);
             if (hasTarget_) {
-                bool reached = directionFwd_ ? (positionSteps_ >= targetPosition_)
-                                             : (positionSteps_ <= targetPosition_);
+                const bool reached = directionFwd_ ? (positionSteps_ >= targetPosition_)
+                                                   : (positionSteps_ <= targetPosition_);
                 if (reached) {
                     running_ = false;
-                    currentSps_ = 0.0F;
-                    targetSps_ = 0;
                     hasTarget_ = false;
                     targetReached_ = true;
+                    // Signal serviceRamp() to zero currentSps_/targetSps_.
+                    // Float writes belong in task context, not in the ISR.
+                    stopRequestedFromIsr_ = true;
                 }
             }
-            portEXIT_CRITICAL_ISR(&g_stepMux);
+        }
+
+        portEXIT_CRITICAL_ISR(&g_stepMux);
+
+        if (isHigh) {
+            ungula::gpio::setHigh(stepPin_);
+        } else {
+            ungula::gpio::setLow(stepPin_);
         }
     }
 
@@ -74,7 +84,17 @@ namespace motor {
     // speed.
 
     void StepGenerator::serviceRamp(uint32_t nowMs) {
-        if (!running_) {
+        // Single lock: drain ISR stop request + snapshot running_ atomically.
+        portENTER_CRITICAL(&g_stepMux);
+        if (stopRequestedFromIsr_) {
+            stopRequestedFromIsr_ = false;
+            currentSps_ = 0.0F;
+            targetSps_ = 0;
+        }
+        const bool snapRunning = running_;
+        portEXIT_CRITICAL(&g_stepMux);
+
+        if (!snapRunning) {
             // Re-arm the dt baseline so the first tick after start uses
             // a sensible delta (whatever start() sets, typically 0).
             lastRampMs_ = nowMs;
@@ -87,23 +107,27 @@ namespace motor {
             return;  // called twice in the same ms — nothing to integrate
         }
 
-        // Snapshot shared state under lock, then compute outside critical section
+        // Snapshot ramp parameters under lock, compute outside, write back under lock.
         portENTER_CRITICAL(&g_stepMux);
-        int32_t snapTarget = targetSps_;
-        float snapAccel = accelRate_;
-        float snapDecel = decelRate_;
-        float snapCurrent = currentSps_;
+        const int32_t snapTarget = targetSps_;
+        const float snapAccel = accelRate_;
+        const float snapDecel = decelRate_;
+        const float snapCurrent = currentSps_;
         portEXIT_CRITICAL(&g_stepMux);
 
-        updateRamp(dtMs, snapTarget, snapAccel, snapDecel, snapCurrent);
+        const float newSps = updateRamp(dtMs, snapTarget, snapAccel, snapDecel, snapCurrent);
 
-        uint32_t newTicks = computeAlarmTicks();
+        portENTER_CRITICAL(&g_stepMux);
+        currentSps_ = newSps;
+        portEXIT_CRITICAL(&g_stepMux);
+
+        const uint32_t newTicks = computeAlarmTicks(newSps);
         if (newTicks != lastAppliedTicks_) {
             applyAlarmTicks(newTicks);
         }
 
         // Auto-stop when ramp reaches zero
-        if (snapTarget == 0 && currentSps_ < step::MIN_RUNNING_SPS) {
+        if (snapTarget == 0 && newSps < step::MIN_RUNNING_SPS) {
             portENTER_CRITICAL(&g_stepMux);
             running_ = false;
             currentSps_ = 0.0F;
@@ -139,7 +163,7 @@ namespace motor {
         timerConfig.clk_src = GPTIMER_CLK_SRC_DEFAULT;
         timerConfig.direction = GPTIMER_COUNT_UP;
         timerConfig.resolution_hz = step::TIMER_FREQ_HZ;
-        timerConfig.flags.intr_shared = true;
+        timerConfig.flags.intr_shared = false;
 
         gptimer_handle_t handle = nullptr;
         if (gptimer_new_timer(&timerConfig, &handle) != ESP_OK) {
@@ -278,23 +302,18 @@ namespace motor {
 
     // ---- Ramp computation (called from esp_timer task, not ISR) ----
 
-    void StepGenerator::updateRamp(uint32_t deltaMs, int32_t snapTarget, float snapAccel,
-                                   float snapDecel, float snapCurrent) {
-        float targetFloat = static_cast<float>(snapTarget);
-        float diff = targetFloat - snapCurrent;
+    float StepGenerator::updateRamp(uint32_t deltaMs, int32_t snapTarget, float snapAccel,
+                                    float snapDecel, float snapCurrent) const {
+        const float targetFloat = static_cast<float>(snapTarget);
+        const float diff = targetFloat - snapCurrent;
 
-        // Pick the right rate: accelerating (speeding up) or decelerating (slowing down)
-        bool speeding = (diff > 0.0F);
-        float rate = speeding ? snapAccel : snapDecel;
+        const float rate = (diff > 0.0F) ? snapAccel : snapDecel;
 
-        float newSps = snapCurrent;
-
-        // Rate of 0 means instant change (no ramp)
+        float newSps;
         if (rate <= 0.0F) {
             newSps = targetFloat;
         } else {
-            float maxChange = rate * (static_cast<float>(deltaMs) / 1000.0F);
-
+            const float maxChange = rate * (static_cast<float>(deltaMs) / 1000.0F);
             if (diff > maxChange) {
                 newSps = snapCurrent + maxChange;
             } else if (diff < -maxChange) {
@@ -304,27 +323,16 @@ namespace motor {
             }
         }
 
-        if (newSps < 0.0F) {
-            newSps = 0.0F;
-        }
-
-        // Single atomic write back
-        currentSps_ = newSps;
+        return (newSps < 0.0F) ? 0.0F : newSps;
     }
 
-    uint32_t StepGenerator::computeAlarmTicks() const {
-        if (currentSps_ < step::MIN_RUNNING_SPS) {
+    uint32_t StepGenerator::computeAlarmTicks(float sps) {
+        if (sps < step::MIN_RUNNING_SPS) {
             return step::IDLE_ALARM_TICKS;
         }
-
-        float togglesPerSec = currentSps_ * step::TOGGLES_PER_STEP;
-        uint32_t ticks =
-                static_cast<uint32_t>(static_cast<float>(step::TIMER_FREQ_HZ) / togglesPerSec);
-
-        if (ticks < step::MIN_ALARM_TICKS) {
-            ticks = step::MIN_ALARM_TICKS;
-        }
-        return ticks;
+        uint32_t ticks = static_cast<uint32_t>(
+                static_cast<float>(step::TIMER_FREQ_HZ) / (sps * step::TOGGLES_PER_STEP));
+        return (ticks < step::MIN_ALARM_TICKS) ? step::MIN_ALARM_TICKS : ticks;
     }
 
     void StepGenerator::applyAlarmTicks(uint32_t ticks) {

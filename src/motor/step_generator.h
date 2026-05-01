@@ -23,9 +23,9 @@
 ///   1. Step ISR (gptimer, hardware interrupt) — toggles pin, counts position
 ///   2. Caller — serviceRamp(), setSpeed(), start/stop()
 ///
-/// All multi-field writes and reads are protected by a portMUX spinlock
-/// (portENTER_CRITICAL / portENTER_CRITICAL_ISR). Single 32-bit aligned
-/// reads (getters) rely on hardware atomicity and volatile ordering.
+/// All shared state is protected by a portMUX spinlock
+/// (portENTER_CRITICAL / portENTER_CRITICAL_ISR). volatile is used only
+/// to prevent compiler caching; it is not the synchronisation mechanism.
 
 namespace motor {
 
@@ -143,6 +143,10 @@ namespace motor {
             volatile bool targetReached_ = false;
             volatile int32_t targetPosition_ = INT32_MAX;
             volatile bool hasTarget_ = false;
+            // Set by ISR when a target-reached stop happens. Consumed by
+            // serviceRamp() to zero currentSps_/targetSps_ outside ISR context
+            // (avoids float writes in the ISR).
+            volatile bool stopRequestedFromIsr_ = false;
 
             // Ramp state — written by ramp timer, read by ramp timer + getters.
             // targetSps_ and rates also written by caller (setSpeed/stop).
@@ -152,9 +156,11 @@ namespace motor {
             volatile float currentSps_ = 0.0F;
             uint32_t lastAppliedTicks_ = step::IDLE_ALARM_TICKS;
 
-            void updateRamp(uint32_t deltaMs, int32_t snapTarget, float snapAccel, float snapDecel,
-                            float snapCurrent);
-            uint32_t computeAlarmTicks() const;
+            // Returns the computed new speed — does NOT write currentSps_.
+            // Caller writes currentSps_ under lock after this returns.
+            float updateRamp(uint32_t deltaMs, int32_t snapTarget, float snapAccel, float snapDecel,
+                             float snapCurrent) const;
+            static uint32_t computeAlarmTicks(float sps);
             void applyAlarmTicks(uint32_t ticks);
     };
 

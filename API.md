@@ -398,11 +398,18 @@ Implements the full `IMotorDriver`. Extras:
 
 - `void configureStall(const StallConfig&)` — call **before** `begin`.
 - `void setStallSensitivity(uint8_t 0..255)` — runtime tweak.
-- Diagnostics: `uint16_t lastStallGuardResult()`, `int32_t diagScore()`,
-  `int32_t sgScore()`, `uint16_t sgThreshold()`,
+- Diagnostics (cached — no UART, safe from any context):
+  `uint16_t lastStallGuardResult()`, `uint32_t drvStatus()`,
+  `int32_t diagScore()`, `int32_t sgScore()`, `uint16_t sgThreshold()`,
   `uint16_t sgBaseline()`, `uint8_t stallSensitivity()`,
   `int32_t diagScoreLimit()`.
-- Register I/O: `void writeRegister(uint8_t, uint32_t)`,
+  Cached values are refreshed every `svc::SG_POLL_INTERVAL_MS` (50 ms)
+  while the motor is moving, **but only when stall detection is enabled**
+  (`sensitivity > 0`). `drvStatus()` returns 0 if stall detection is not
+  configured.
+- Register I/O (live UART reads — avoid from the main loop while the
+  motor is running; use cached getters above instead):
+  `void writeRegister(uint8_t, uint32_t)`,
   `uint32_t readRegister(uint8_t)`,
   `static uint8_t calcCrc(const uint8_t*, uint8_t)`,
   `uint16_t readStallGuardResult()`, `uint32_t clearGstat()`.
@@ -541,9 +548,16 @@ wire protocol if you need full fidelity.
   `LimitSwitch::configure(pin, /*invertPolarity=*/true)`. `LocalMotor`
   uses NC by default; the per-pin polarity setter is on the
   `LimitSwitch` directly (not exposed through `LocalMotor`).
-- **TMC2209 UART**: blocking calls per register access (~3 ms round
-  trip). Polled at most every `svc::SG_POLL_INTERVAL_MS = 50` ms by the
-  driver, so the service tick stays responsive. Don't share the UART
+- **TMC2209 UART**: each `readRegister` / `writeRegister` call is a
+  blocking UART transaction (up to `REPLY_TIMEOUT_MS = 20` ms). A
+  FreeRTOS mutex inside the driver serialises concurrent callers —
+  the service timer's 50 ms poll and any direct application call will
+  not corrupt each other, but the application call may block up to
+  20 ms waiting for the service timer to finish. Avoid live UART calls
+  (`readRegister`, `readStallGuardResult`, `drvStatus` before v2.2.1,
+  `clearGstat`) from the main loop while the motor is running — use the
+  cached diagnostics getters instead. `drvStatus()` now returns the
+  cached value; no code change needed in callers. Don't share the UART
   port across drivers.
 - **Stall detection at low speed**: `stall::LOW_SPEED_SPS = 1200`
   suppresses DIAG below this — back-EMF too weak for reliable

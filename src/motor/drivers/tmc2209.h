@@ -11,10 +11,6 @@
 #include <cstdint>
 
 /// @brief TMC2209 stepper driver over UART.
-///
-/// Replaces the TMCStepper Arduino library — direct register access,
-/// no external dependencies beyond our own UART HAL.
-///
 /// Owns all GPIO pins (STEP, EN, DIR, DIAG) and the complete stall
 /// detection pipeline: DIAG pin polling, SG_RESULT register reads,
 /// speed-based thresholds, blanking during acceleration, and scoring.
@@ -165,10 +161,11 @@ namespace tmc {
     // PWM_REG, PWM_LIM, multistep_filt …) the next time we write the
     // register. Seeding from the datasheet preserves those fields.
     namespace reset {
-        constexpr uint32_t GCONF       = 0x00000101;  // I_scale_analog=1, multistep_filt=1
-        constexpr uint32_t CHOPCONF    = 0x10000053;  // TOFF=3, TBL=2, HEND=0, MRES=0, intpol=0
-        constexpr uint32_t PWMCONF     = 0xC10D0024;  // PWM_OFS=0x24, PWM_FREQ=1, autoscale=1, autograd=1, PWM_REG=1, PWM_LIM=0xC
-        constexpr uint32_t IHOLD_IRUN  = 0x00071703;  // IHOLD=3, IRUN=23, IHOLDDELAY=7
+        constexpr uint32_t GCONF = 0x00000101;       // I_scale_analog=1, multistep_filt=1
+        constexpr uint32_t CHOPCONF = 0x10000053;    // TOFF=3, TBL=2, HEND=0, MRES=0, intpol=0
+        constexpr uint32_t PWMCONF = 0xC10D0024;     // PWM_OFS=0x24, PWM_FREQ=1, autoscale=1,
+                                                     // autograd=1, PWM_REG=1, PWM_LIM=0xC
+        constexpr uint32_t IHOLD_IRUN = 0x00071703;  // IHOLD=3, IRUN=23, IHOLDDELAY=7
     }  // namespace reset
 
     // ---- Sensible defaults applied by begin() ----
@@ -269,8 +266,6 @@ namespace tmc {
             int32_t sgConfirmCount = motor::stall::DEFAULT_SG_SCORE_LIMIT;
     };
 
-    // ============================================================
-
     /// @brief TMC2209 stepper motor driver — UART register-level control.
     ///
     /// Caches GCONF, CHOPCONF, PWMCONF, and IHOLD_IRUN locally to avoid
@@ -297,13 +292,21 @@ namespace tmc {
             void begin() override;
             void enable() override;
             void disable() override;
+            uint8_t version() override;
+
             void setDirection(motor::Direction dir) override;
             uint8_t stepPin() const override;
             void setDirectionInverted(bool inverted) override;
             void setMicrosteps(uint16_t microsteps) override;
             void setRunCurrent(uint16_t milliAmps) override;
-            uint32_t drvStatus() override;
-            uint8_t version() override;
+
+            /// @brief Last DRV_STATUS value read by the service timer.
+            /// Returns a cached value — no UART read. Updated every
+            /// svc::SG_POLL_INTERVAL_MS (50 ms) while the motor is moving,
+            /// but only when stall detection is enabled (sensitivity > 0).
+            /// Returns 0 if stall detection is not configured.
+            /// Safe to call from any context including the main loop.
+            uint32_t lastDrvStatus() override;
 
             // Stall detection lifecycle (IMotorDriver)
             void prepareStallDetection(int32_t speedSps, uint32_t accelMs) override;
@@ -322,12 +325,7 @@ namespace tmc {
             /// For initial setup, use configureStall() instead.
             void setStallSensitivity(uint8_t sensitivity);
 
-            // ---- Stall diagnostics (for HTTP API and logging) ----
-
-            /// @brief Last SG_RESULT value read via UART.
-            uint16_t lastStallGuardResult() const {
-                return lastSgResult_;
-            }
+            // ---- Stall diagnostics ----
 
             /// @brief Current DIAG score (how close to triggering).
             int32_t diagScore() const {
@@ -370,8 +368,15 @@ namespace tmc {
             /// versions on the same hardware.
             void dumpRegisters(const char* tag);
 
-            /// @brief Read StallGuard result from dedicated register 0x41.
+            /// @brief Read SG_RESULT result via a live UART transaction. 'Time consuming'.
+            /// Use `lastStallGuardResult()` for a cached value updated by the service timer.
             uint16_t readStallGuardResult();
+
+            /// @brief Last SG_RESULT value cached.
+            /// Use `readStallGuardResult()` for live reads — this is only updated by the service
+            uint16_t lastStallGuardResult() const {
+                return lastSgResult_;
+            }
 
             uint32_t clearGstat();
 
@@ -439,6 +444,15 @@ namespace tmc {
             uint16_t lastSgResult_ = 0xFFFF;
             uint32_t lastSgPollMs_ = 0;
             int32_t targetSpeedSps_ = 0;
+
+            // Cached driver status
+            volatile uint32_t lastDrvStatus_ = 0;
+
+            // FreeRTOS mutex serialising UART access — prevents contention
+            // between the service timer's register polls and any direct
+            // readRegister / writeRegister calls from application code.
+            // Opaque here; cast to SemaphoreHandle_t in .cpp.
+            void* uartMutex_ = nullptr;
 
             // Helpers
             /// Sensitivity is the gate for all stall detection. DIAG pin is optional
