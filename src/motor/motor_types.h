@@ -124,6 +124,28 @@ namespace motor {
         constexpr int32_t LOW_SPEED_SPS = 1200;  /// Below this speed, DIAG is suppressed.
     }  // namespace stall
 
+    /// @brief Which stall detection path triggered.
+    enum class StallCause : uint8_t {
+        None,      /// No stall active — snapshot taken during normal operation.
+        Diag,      /// DIAG pin path crossed its score limit first.
+        Register,  /// SG_RESULT register path crossed its score limit first.
+        Both,      /// Both paths were above their limits at snapshot time.
+    };
+
+    /// @brief Read-only snapshot of stall state at the moment of the last check.
+    /// Capture this immediately after isStalling() returns true — the next
+    /// service tick may update the scores.
+    struct StallTelemetry {
+            StallCause cause     = StallCause::None;
+            int32_t    diagScore = 0;   /// DIAG score at snapshot time.
+            int32_t    diagLimit = 0;   /// DIAG score limit (trigger threshold).
+            int32_t    sgScore   = 0;   /// SG_RESULT score at snapshot time.
+            int32_t    sgLimit   = 0;   /// SG_RESULT score limit.
+            uint16_t   sgResult  = 0;   /// Last raw SG_RESULT read from chip.
+            uint16_t   sgThresh  = 0;   /// Speed-based SG threshold at trigger.
+            uint16_t   sgBase    = 0;   /// Expected SG baseline at current speed.
+    };
+
     // ---- Step generator constants ----
     namespace step {
         constexpr uint32_t TIMER_FREQ_HZ = 1'000'000;   /// 1 MHz timer for step pulses.

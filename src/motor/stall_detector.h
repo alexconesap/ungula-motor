@@ -222,6 +222,11 @@ namespace motor {
                 return sgScore_;
             }
 
+            /// @brief Current SG_RESULT score limit.
+            int32_t sgScoreLimitNow() const {
+                return sgScoreLimit_;
+            }
+
             /// @brief Active SG threshold (from speed-based calculation).
             uint16_t sgThresholdNow() const {
                 return sgThreshold_;

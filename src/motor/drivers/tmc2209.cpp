@@ -140,6 +140,7 @@ namespace tmc {
     }
 
     void Tmc2209::setDirection(motor::Direction dir) {
+        currentDirection_ = dir;
         if (dir == motor::Direction::FORWARD) {
             ungula::gpio::setHigh(dirPin_);
         } else {
@@ -461,21 +462,36 @@ namespace tmc {
 
     void Tmc2209::configureStall(const StallConfig& config) {
         diagPin_ = config.diagPin;
-        stallSensitivity_ = config.sensitivity;
-        stallDetector_.setDiagScoreLimit(config.diagConfirmCount);
-        stallDetector_.setSgPerSps(config.sgSlope);
-        stallDetector_.setSgBaselineCap(config.sgMaxBaseline);
-        stallDetector_.setStallFraction(config.sgDropFraction);
-        stallDetector_.setScoreLimit(config.sgConfirmCount);
+        stallProfileFwd_ = config.forward;
+        stallProfileBwd_ = config.backward;
+        // Apply the current direction's profile to the detector now so that
+        // diagnostic reads before the first motion reflect a sane state.
+        applyProfile(activeProfile());
         log_info_force_m(module(),
-                         "Stall config: diagPin=%u sensitivity=%u diagConfirm=%ld sgSlope=%.2f "
-                         "sgMaxBaseline=%u sgDropFraction=%.2f sgConfirm=%ld",
-                         diagPin_, stallSensitivity_, config.diagConfirmCount, config.sgSlope,
-                         config.sgMaxBaseline, config.sgDropFraction, config.sgConfirmCount);
+                         "Stall config: diagPin=%u | FWD sens=%u diag=%ld sg=%.2f/%.2f/%u/%ld | "
+                         "BWD sens=%u diag=%ld sg=%.2f/%.2f/%u/%ld",
+                         diagPin_,
+                         config.forward.sensitivity, config.forward.diagConfirmCount,
+                         static_cast<double>(config.forward.sgSlope),
+                         static_cast<double>(config.forward.sgDropFraction),
+                         config.forward.sgMaxBaseline, config.forward.sgConfirmCount,
+                         config.backward.sensitivity, config.backward.diagConfirmCount,
+                         static_cast<double>(config.backward.sgSlope),
+                         static_cast<double>(config.backward.sgDropFraction),
+                         config.backward.sgMaxBaseline, config.backward.sgConfirmCount);
+    }
+
+    void Tmc2209::applyProfile(const StallProfile& p) {
+        stallDetector_.setDiagScoreLimit(p.diagConfirmCount);
+        stallDetector_.setSgPerSps(p.sgSlope);
+        stallDetector_.setSgBaselineCap(p.sgMaxBaseline);
+        stallDetector_.setStallFraction(p.sgDropFraction);
+        stallDetector_.setScoreLimit(p.sgConfirmCount);
     }
 
     void Tmc2209::setStallSensitivity(uint8_t sensitivity) {
-        stallSensitivity_ = sensitivity;
+        stallProfileFwd_.sensitivity = sensitivity;
+        stallProfileBwd_.sensitivity = sensitivity;
     }
 
     //
@@ -483,14 +499,21 @@ namespace tmc {
     //
 
     void Tmc2209::prepareStallDetection(int32_t speedSps, uint32_t accelMs) {
+        // Select the profile for the direction that was just set via setDirection().
+        // setDirection() is called by LocalMotor::applyDirection() before every
+        // startMotion(), so currentDirection_ is always current here.
+        applyProfile(activeProfile());
+
         stallDetector_.clear();
         stallDetector_.configureForSpeed(speedSps);
         targetSpeedSps_ = speedSps;
 
         // Suppress stall detection during the acceleration ramp.
-        // TMC2209 StallGuard is unreliable at low speed — DIAG reads HIGH
-        // at standstill or during ramp-up, causing false stall triggers.
-        stallBlankUntilMs_ = ungula::TimeControl::millis() + accelMs + STALL_SETTLE_MARGIN_MS;
+        // The service-timer jitter makes the actual ramp take ~20% longer than
+        // the configured accelMs — multiply by 1.25 so blanking covers the full
+        // ramp, then add STALL_SETTLE_MARGIN_MS for post-cruise stabilisation.
+        uint32_t paddedAccelMs = accelMs + (accelMs / 4U);
+        stallBlankUntilMs_ = ungula::TimeControl::millis() + paddedAccelMs + STALL_SETTLE_MARGIN_MS;
 
         reconfigureStallForSpeed(speedSps);
     }
@@ -523,12 +546,12 @@ namespace tmc {
             }
         }
 
-        // DIAG pin — scored during and after blanking (GPIO read, zero UART cost).
-        // Suppressed only at low speed where back-EMF is too weak for reliable assertion.
-        // diagConfirmCount consecutive HIGH readings are needed to trigger — this
-        // naturally filters brief ramp transients while still catching a real hard-stop
-        // that keeps DIAG asserted for many service ticks.
-        if (diagPin_ != motor::GPIO_NONE && !lowSpeed) {
+        // DIAG pin — suppressed during blanking and at low speed.
+        // Blanking covers the ramp: SG is weak during acceleration and the hardware
+        // threshold (2×SGTHRS) fires false positives. After blanking, if the motor is
+        // still blocked (SG stays low at cruise), DIAG fires immediately on the first
+        // post-blanking tick — we don't lose real-stall detection by waiting.
+        if (diagPin_ != motor::GPIO_NONE && !blanking && !lowSpeed) {
             stallDetector_.pollPin(ungula::gpio::isHigh(diagPin_));
         }
 
@@ -554,10 +577,11 @@ namespace tmc {
     // Reconfigure StallGuard registers for the target speed.
     // Sensitivity and TCOOLTHRS are speed-dependent.
     void Tmc2209::reconfigureStallForSpeed(int32_t speedSps) {
-        if (stallSensitivity_ == 0) {
+        const uint8_t sensitivity = activeProfile().sensitivity;
+        if (sensitivity == 0) {
             return;
         }
-        setStallGuardThreshold(stallSensitivity_);
+        setStallGuardThreshold(sensitivity);
         setTcoolthrs(computeTcoolthrs(speedSps, microsteps_));
     }
 

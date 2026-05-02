@@ -556,6 +556,7 @@ namespace motor {
     // ============================================================
 
     void LocalMotor::clearStall() {
+        lastStopReason_ = StopReason::None;
         driver_->clearStall();
         fsm_.clearStall();
     }

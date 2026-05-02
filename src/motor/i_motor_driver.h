@@ -108,6 +108,14 @@ namespace motor {
 
             // ---- Status (optional, not all drivers support these) ----
 
+            /// @brief Snapshot of stall detection state at the last service tick.
+            /// Capture immediately after isStalling() returns true. Returns a
+            /// zero-initialized snapshot (cause=None) if the driver does not
+            /// support stall telemetry.
+            virtual StallTelemetry stallTelemetry() const {
+                return {};
+            }
+
             /// @brief Returns last driver status register. Returns 0 if not supported.
             virtual uint32_t lastDrvStatus() {
                 return 0;

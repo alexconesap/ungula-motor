@@ -227,35 +227,31 @@ namespace tmc {
     constexpr float TMC_FCLK = 12000000.0F;
     constexpr float TMC_INTERNAL_USTEPS = 256.0F;
     constexpr float TCOOLTHRS_MARGIN = 1.5F;
-    constexpr uint32_t STALL_SETTLE_MARGIN_MS = 50;
+    constexpr uint32_t STALL_SETTLE_MARGIN_MS = 300;
 
     // ---- Stall detection configuration ----
 
-    /// @brief All stall detection parameters in one place.
+    /// @brief Per-direction stall tuning parameters.
     ///
-    /// Sensible defaults are provided for every field — only override
-    /// what differs for your motor. At minimum, set `diagPin` and
-    /// `sensitivity`. The rest works out of the box for most setups.
-    ///
-    /// Pass to Tmc2209::configureStall() before begin().
-    struct StallConfig {
-            /// DIAG output pin on the driver (GPIO_NONE = not wired, no stall detection).
-            uint8_t diagPin = motor::GPIO_NONE;
-
+    /// Real motor mechanics are asymmetric by direction — friction, gravity,
+    /// and cable drag differ between FORWARD and BACKWARD. Using separate
+    /// profiles lets you tune each direction independently instead of
+    /// compromising on a single threshold that is too tight in one direction
+    /// and too loose in the other.
+    struct StallProfile {
             /// StallGuard sensitivity (0-255). Higher = more sensitive.
-            /// Stall triggers when SG_RESULT < 2 × sensitivity.
+            /// Stall triggers on the DIAG path when SG_RESULT < 2 × sensitivity.
             uint8_t sensitivity = 0;
 
-            /// DIAG pin path: consecutive HIGH readings needed to confirm a stall.
+            /// DIAG pin path: score increments needed to confirm a stall.
             int32_t diagConfirmCount = motor::stall::DEFAULT_DIAG_SCORE_LIMIT;
 
             /// SG_RESULT per step-per-second — the motor's load characteristic slope.
-            /// Measured once: run at known speed with no load, read SG_RESULT, divide
-            /// by speed. Example: SG=110 at 600 sps → 0.18.
+            /// Measured once at known speed with no load: SG ÷ speed.
             float sgSlope = motor::stall::DEFAULT_SG_PER_SPS;
 
             /// Maximum baseline value — SG_RESULT saturates at high speeds.
-            /// Set to ~80% of observed SG at max operating speed.
+            /// Set to ~80% of observed SG at the highest operating speed.
             uint16_t sgMaxBaseline = motor::stall::DEFAULT_SG_BASELINE_CAP;
 
             /// How far SG must drop from the speed-based baseline to count as
@@ -264,6 +260,33 @@ namespace tmc {
 
             /// Net stall-readings needed to confirm a stall via SG_RESULT path.
             int32_t sgConfirmCount = motor::stall::DEFAULT_SG_SCORE_LIMIT;
+    };
+
+    /// @brief Full stall detection configuration: hardware pin + per-direction tuning.
+    ///
+    /// Set `diagPin` to the GPIO connected to the TMC2209 DIAG output.
+    /// Tune `forward` and `backward` independently for asymmetric loads.
+    /// Use `StallConfig::symmetric()` when both directions have the same profile.
+    ///
+    /// Pass to Tmc2209::configureStall() before begin().
+    struct StallConfig {
+            /// DIAG output pin on the driver (GPIO_NONE = not wired, DIAG path disabled).
+            uint8_t diagPin = motor::GPIO_NONE;
+
+            /// Stall tuning applied when the motor moves in FORWARD direction.
+            StallProfile forward;
+
+            /// Stall tuning applied when the motor moves in BACKWARD direction.
+            StallProfile backward;
+
+            /// Convenience: identical profile for both directions.
+            static StallConfig symmetric(uint8_t pin, const StallProfile& profile) {
+                StallConfig cfg;
+                cfg.diagPin = pin;
+                cfg.forward = profile;
+                cfg.backward = profile;
+                return cfg;
+            }
     };
 
     /// @brief TMC2209 stepper motor driver — UART register-level control.
@@ -315,6 +338,26 @@ namespace tmc {
             bool isStalling() const override;
             void clearStall() override;
 
+            motor::StallTelemetry stallTelemetry() const override {
+                bool diagFired = stallDetector_.isDiagStalling();
+                bool sgFired   = stallDetector_.isRegisterStalling();
+                motor::StallCause cause;
+                if (diagFired && sgFired)   cause = motor::StallCause::Both;
+                else if (diagFired)         cause = motor::StallCause::Diag;
+                else if (sgFired)           cause = motor::StallCause::Register;
+                else                        cause = motor::StallCause::None;
+                return {
+                    cause,
+                    stallDetector_.diagScoreNow(),
+                    stallDetector_.diagScoreLimitNow(),
+                    stallDetector_.sgScoreNow(),
+                    stallDetector_.sgScoreLimitNow(),
+                    lastSgResult_,
+                    stallDetector_.sgThresholdNow(),
+                    stallDetector_.sgBaselineNow(),
+                };
+            }
+
             // ---- Stall detection configuration (TMC2209-specific) ----
 
             /// @brief Configure all stall detection parameters at once.
@@ -347,9 +390,9 @@ namespace tmc {
                 return stallDetector_.sgBaselineNow();
             }
 
-            /// @brief Current SGTHRS value (0-255).
+            /// @brief Active StallGuard sensitivity (from the current direction's profile).
             uint8_t stallSensitivity() const {
-                return stallSensitivity_;
+                return activeProfile().sensitivity;
             }
 
             /// @brief Current DIAG score limit.
@@ -438,7 +481,9 @@ namespace tmc {
             // Stall detection state
             uint8_t diagPin_ = motor::GPIO_NONE;
             motor::StallDetector stallDetector_;
-            uint8_t stallSensitivity_ = 0;
+            StallProfile stallProfileFwd_;
+            StallProfile stallProfileBwd_;
+            motor::Direction currentDirection_ = motor::Direction::FORWARD;
             uint16_t microsteps_ = defaults::MICROSTEPS;
             uint32_t stallBlankUntilMs_ = 0;
             uint16_t lastSgResult_ = 0xFFFF;
@@ -455,12 +500,15 @@ namespace tmc {
             void* uartMutex_ = nullptr;
 
             // Helpers
-            /// Sensitivity is the gate for all stall detection. DIAG pin is optional
-            /// (adds a fast hardware path when wired) but without sensitivity > 0
-            /// neither path can trigger.
-            bool isStallDetectionEnabled() const {
-                return stallSensitivity_ != 0;
+            const StallProfile& activeProfile() const {
+                return (currentDirection_ == motor::Direction::BACKWARD)
+                        ? stallProfileBwd_
+                        : stallProfileFwd_;
             }
+            bool isStallDetectionEnabled() const {
+                return activeProfile().sensitivity != 0;
+            }
+            void applyProfile(const StallProfile& p);
             void setBit(uint32_t& cache, uint8_t regAddr, uint32_t mask, bool value);
             void setField(uint32_t& cache, uint8_t regAddr, uint32_t mask, uint32_t value);
             void enableStallDetection();
