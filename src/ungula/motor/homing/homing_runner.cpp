@@ -18,7 +18,7 @@ namespace ungula::motor::homing {
         if (state_ == State::Running) {
             return;
         }
-        startMs_ = ungula::core::time::TimeControl::millis();
+        startMs_ = ungula::core::time::millis();
         state_ = State::Running;
         strategy_.begin(motor_);
     }
@@ -30,8 +30,7 @@ namespace ungula::motor::homing {
 
         // Wall-clock guard. 0 disables the timeout so strategies with their own
         // internal deadline can opt out.
-        if (timeoutMs_ != 0U &&
-            (ungula::core::time::TimeControl::millis() - startMs_) >= timeoutMs_) {
+        if (timeoutMs_ != 0U && (ungula::core::time::millis() - startMs_) >= timeoutMs_) {
             strategy_.finish(motor_, false);
             state_ = State::DoneFail;
             return true;
@@ -59,7 +58,7 @@ namespace ungula::motor::homing {
         if (state_ == State::Idle) {
             return 0U;
         }
-        return ungula::core::time::TimeControl::millis() - startMs_;
+        return ungula::core::time::millis() - startMs_;
     }
 
 }  // namespace ungula::motor::homing

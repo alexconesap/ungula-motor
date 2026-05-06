@@ -340,7 +340,7 @@ namespace ungula::motor {
         hasPendingProfile_ = true;
         portEXIT_CRITICAL(&g_motorMux);
 
-        int64_t nowMs = ungula::core::time::TimeControl::syncNow();
+        int64_t nowMs = ungula::core::time::syncNow();
         if (profile.startTimeMs == 0 || profile.startTimeMs <= nowMs) {
             servicePendingProfile(nowMs);
         } else {
@@ -486,7 +486,7 @@ namespace ungula::motor {
 
         isHomed_ = false;
         homingPhase_ = HomingPhase::Running;
-        homingStartMs_ = ungula::core::time::TimeControl::syncNow();
+        homingStartMs_ = ungula::core::time::syncNow();
         // strategy.begin() will issue motion commands; mark them as
         // "internal" so isHomed_ isn't immediately invalidated by them.
         internalMotionFromHoming_ = true;
@@ -579,7 +579,7 @@ namespace ungula::motor {
         cachedPosition_ = stepper_.position();
 
         // Update limit switches (debounce polling)
-        int64_t nowMs = ungula::core::time::TimeControl::syncNow();
+        int64_t nowMs = ungula::core::time::syncNow();
 
         // Drive the step-pulse acceleration ramp from this single service
         // tick — keeps ramp updates and gptimer alarm reconfig in one task.

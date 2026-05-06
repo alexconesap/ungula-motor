@@ -26,7 +26,7 @@ namespace ungula::motor::homing {
     ///   while (xRunner.isRunning() || yRunner.isRunning()) {
     ///     xRunner.step();
     ///     yRunner.step();
-    ///     ungula::core::time::TimeControl::delayMs(5);
+    ///     ungula::core::time::delayMs(5);
     ///   }
     ///
     /// A timeout of 0 disables the wall-clock limit — the strategy decides

@@ -7,7 +7,7 @@ publisher, and pluggable homing strategies — all autonomous after
 `begin()`. A `RemoteMotor` proxy and a `MotorCoordinator` round out the
 multi-axis story. Includes a built-in TMC2209 UART driver.
 
-Depends on `UngulaCore` (`TimeControl`, `IPreferences` not used here),
+Depends on `UngulaCore` (`ungula::core::time`, `IPreferences` not used here),
 `UngulaHal` (`gpio`, `uart`), `EmblogX` (logging — only legacy paths).
 ESP32-only because step pulses ride a GPTimer ISR and the ramp ride
 `esp_timer`. Host builds compile the platform-independent interfaces and
@@ -186,7 +186,7 @@ mot.setHomingStrategy(&strategy);
 mot_x.home();
 mot_y.home();
 while (mot_x.isHoming() || mot_y.isHoming()) {
-    ungula::core::time::TimeControl::delayMs(5);
+    ungula::core::time::delayMs(5);
 }
 if (!mot_x.isHomed() || !mot_y.isHomed()) { /* report */ }
 ```

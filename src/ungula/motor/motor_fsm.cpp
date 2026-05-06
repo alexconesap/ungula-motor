@@ -40,7 +40,7 @@ namespace ungula::motor {
             event.previousState = prev;
             event.newState = next;
             event.positionSteps = (positionSource_ != nullptr) ? *positionSource_ : 0;
-            event.timestampMs = ungula::core::time::TimeControl::syncNow();
+            event.timestampMs = ungula::core::time::syncNow();
             publisher_->publish(event);
         }
         return true;

@@ -15,7 +15,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(googletest)
 
 # ---------------------------------------------------------------------------
-# Dependencies: UngulaCore (headers for TimeControl, GpioAccess) and EmblogX
+# Dependencies: UngulaCore (headers for the time API, GpioAccess) and EmblogX
 # (tmc_stepper.cpp uses log_error via <emblogx/logger.h>).
 #
 # By default we use sibling directories (../../lib, ../../lib_emblogx) which
@@ -92,7 +92,7 @@ target_link_libraries(test_ungula_motor_homing gtest_main)
 # ---------------------------------------------------------------------------
 # FSM, event publisher, coordinator, and remote-motor proxy — all pure
 # host code. No esp_timer / gptimer / FreeRTOS — these compile and run
-# entirely on the host. motor_fsm.cpp pulls TimeControl::syncNow() at
+# entirely on the host. motor_fsm.cpp pulls ungula::core::time::syncNow() at
 # event-stamp time; UngulaCore is already on the include path.
 # ---------------------------------------------------------------------------
 add_executable(test_ungula_motor_core

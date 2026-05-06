@@ -417,7 +417,7 @@ Each motor owns its own homing run, so coordinating two axes is just two calls a
 mot_x.home();
 mot_y.home();
 while (mot_x.isHoming() || mot_y.isHoming()) {
-    ungula::core::time::TimeControl::delayMs(5);
+    ungula::core::time::delayMs(5);
 }
 if (!mot_x.isHomed() || !mot_y.isHomed()) { /* report / retry */ }
 ```
@@ -482,7 +482,7 @@ ctest --output-on-failure
 
 | Library | Used for |
 | --- | --- |
-| UngulaCore | `TimeControl` (FSM timestamps), `GpioAccess` (limit switches) |
+| UngulaCore | `ungula::core::time` (FSM timestamps), `GpioAccess` (limit switches) |
 | UngulaHal | `Uart` (TMC2209 communication), `gpio` (driver pins) |
 | EmblogX | Logging in legacy TmcStepper only |
 

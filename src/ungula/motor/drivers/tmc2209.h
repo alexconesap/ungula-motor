@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include <ungula/motor/i_motor_driver.h>
-#include <ungula/motor/stall_detector.h>
 #include <ungula/hal/gpio/gpio_access.h>
 #include <ungula/hal/uart/uart.h>
+#include <ungula/motor/i_motor_driver.h>
+#include <ungula/motor/stall_detector.h>
 #include <cstdint>
 
 /// @brief TMC2209 stepper driver over UART.
@@ -25,6 +25,7 @@ namespace ungula::motor::tmc {
     constexpr uint8_t WRITE_FLAG = 0x80;
     constexpr uint8_t REPLY_MASTER_ADDR = 0xFF;
     constexpr uint8_t CRC_POLYNOMIAL = 0x07;
+
     constexpr uint8_t BITS_PER_BYTE = 8;
     constexpr uint8_t WRITE_DATAGRAM_LEN = 8;
     constexpr uint8_t READ_REQUEST_LEN = 4;
@@ -244,22 +245,22 @@ namespace ungula::motor::tmc {
             uint8_t sensitivity = 0;
 
             /// DIAG pin path: score increments needed to confirm a stall.
-            int32_t diagConfirmCount = motor::stall::DEFAULT_DIAG_SCORE_LIMIT;
+            int32_t diagConfirmCount = ungula::motor::stall::DEFAULT_DIAG_SCORE_LIMIT;
 
             /// SG_RESULT per step-per-second — the motor's load characteristic slope.
             /// Measured once at known speed with no load: SG ÷ speed.
-            float sgSlope = motor::stall::DEFAULT_SG_PER_SPS;
+            float sgSlope = ungula::motor::stall::DEFAULT_SG_PER_SPS;
 
             /// Maximum baseline value — SG_RESULT saturates at high speeds.
             /// Set to ~80% of observed SG at the highest operating speed.
-            uint16_t sgMaxBaseline = motor::stall::DEFAULT_SG_BASELINE_CAP;
+            uint16_t sgMaxBaseline = ungula::motor::stall::DEFAULT_SG_BASELINE_CAP;
 
             /// How far SG must drop from the speed-based baseline to count as
             /// a stall reading (0.0–1.0). Lower = less sensitive.
-            float sgDropFraction = motor::stall::DEFAULT_STALL_FRACTION;
+            float sgDropFraction = ungula::motor::stall::DEFAULT_STALL_FRACTION;
 
             /// Net stall-readings needed to confirm a stall via SG_RESULT path.
-            int32_t sgConfirmCount = motor::stall::DEFAULT_SG_SCORE_LIMIT;
+            int32_t sgConfirmCount = ungula::motor::stall::DEFAULT_SG_SCORE_LIMIT;
     };
 
     /// @brief Full stall detection configuration: hardware pin + per-direction tuning.
@@ -271,7 +272,7 @@ namespace ungula::motor::tmc {
     /// Pass to Tmc2209::configureStall() before begin().
     struct StallConfig {
             /// DIAG output pin on the driver (GPIO_NONE = not wired, DIAG path disabled).
-            uint8_t diagPin = motor::GPIO_NONE;
+            uint8_t diagPin = ungula::motor::GPIO_NONE;
 
             /// Stall tuning applied when the motor moves in FORWARD direction.
             StallProfile forward;
@@ -297,7 +298,7 @@ namespace ungula::motor::tmc {
     ///
     /// Owns stall detection: DIAG pin polling, SG_RESULT register reads,
     /// speed-based thresholds, and blanking during acceleration.
-    class Tmc2209 : public motor::IMotorDriver {
+    class Tmc2209 : public ungula::motor::IMotorDriver {
         public:
             /// @param uart      UART port connected to TMC2209 PDN_UART.
             /// @param rSense    External sense resistor value in ohms.
@@ -317,7 +318,7 @@ namespace ungula::motor::tmc {
             void disable() override;
             uint8_t version() override;
 
-            void setDirection(motor::Direction dir) override;
+            void setDirection(ungula::motor::Direction dir) override;
             uint8_t stepPin() const override;
             void setDirectionInverted(bool inverted) override;
             void setMicrosteps(uint16_t microsteps) override;
@@ -341,15 +342,15 @@ namespace ungula::motor::tmc {
             motor::StallTelemetry stallTelemetry() const override {
                 bool diagFired = stallDetector_.isDiagStalling();
                 bool sgFired = stallDetector_.isRegisterStalling();
-                motor::StallCause cause;
+                ungula::motor::StallCause cause;
                 if (diagFired && sgFired)
-                    cause = motor::StallCause::Both;
+                    cause = ungula::motor::StallCause::Both;
                 else if (diagFired)
-                    cause = motor::StallCause::Diag;
+                    cause = ungula::motor::StallCause::Diag;
                 else if (sgFired)
-                    cause = motor::StallCause::Register;
+                    cause = ungula::motor::StallCause::Register;
                 else
-                    cause = motor::StallCause::None;
+                    cause = ungula::motor::StallCause::None;
                 return {
                         cause,
                         stallDetector_.diagScoreNow(),
@@ -483,11 +484,11 @@ namespace ungula::motor::tmc {
             uint32_t iholdrun_ = 0;
 
             // Stall detection state
-            uint8_t diagPin_ = motor::GPIO_NONE;
-            motor::StallDetector stallDetector_;
+            uint8_t diagPin_ = ungula::motor::GPIO_NONE;
+            ungula::motor::StallDetector stallDetector_;
             StallProfile stallProfileFwd_;
             StallProfile stallProfileBwd_;
-            motor::Direction currentDirection_ = motor::Direction::FORWARD;
+            ungula::motor::Direction currentDirection_ = ungula::motor::Direction::FORWARD;
             uint16_t microsteps_ = defaults::MICROSTEPS;
             uint32_t stallBlankUntilMs_ = 0;
             uint16_t lastSgResult_ = 0xFFFF;
@@ -505,8 +506,8 @@ namespace ungula::motor::tmc {
 
             // Helpers
             const StallProfile& activeProfile() const {
-                return (currentDirection_ == motor::Direction::BACKWARD) ? stallProfileBwd_
-                                                                         : stallProfileFwd_;
+                return (currentDirection_ == ungula::motor::Direction::BACKWARD) ? stallProfileBwd_
+                                                                                 : stallProfileFwd_;
             }
             bool isStallDetectionEnabled() const {
                 return activeProfile().sensitivity != 0;

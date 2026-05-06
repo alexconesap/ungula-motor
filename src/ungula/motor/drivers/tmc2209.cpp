@@ -56,7 +56,7 @@ namespace ungula::motor::tmc {
         uint8_t echo[WRITE_DATAGRAM_LEN];
         uart_.read(echo, WRITE_DATAGRAM_LEN, ECHO_TIMEOUT_MS);
 
-        ungula::core::time::TimeControl::delayMs(INTER_DATAGRAM_MS);
+        ungula::core::time::delayMs(INTER_DATAGRAM_MS);
         xSemaphoreGive(static_cast<SemaphoreHandle_t>(uartMutex_));
     }
 
@@ -118,9 +118,9 @@ namespace ungula::motor::tmc {
           enablePin_(enablePin),
           dirPin_(dirPin),
           address_(address) {
-        assert(stepPin_ != motor::GPIO_NONE);
-        assert(enablePin_ != motor::GPIO_NONE);
-        assert(dirPin_ != motor::GPIO_NONE);
+        assert(stepPin_ != ungula::motor::GPIO_NONE);
+        assert(enablePin_ != ungula::motor::GPIO_NONE);
+        assert(dirPin_ != ungula::motor::GPIO_NONE);
     }
 
     const char* Tmc2209::module() const {
@@ -139,9 +139,9 @@ namespace ungula::motor::tmc {
         ungula::hal::gpio::setHigh(enablePin_);
     }
 
-    void Tmc2209::setDirection(motor::Direction dir) {
+    void Tmc2209::setDirection(ungula::motor::Direction dir) {
         currentDirection_ = dir;
-        if (dir == motor::Direction::FORWARD) {
+        if (dir == ungula::motor::Direction::FORWARD) {
             ungula::hal::gpio::setHigh(dirPin_);
         } else {
             ungula::hal::gpio::setLow(dirPin_);
@@ -222,7 +222,7 @@ namespace ungula::motor::tmc {
         setRunCurrent(config_.runCurrentMa, config_.holdFraction);
 
         // When DIAG pin is configured, set up StallGuard4 registers
-        if (diagPin_ != motor::GPIO_NONE) {
+        if (diagPin_ != ungula::motor::GPIO_NONE) {
             ungula::hal::gpio::configInput(diagPin_);
             enableStallDetection();
         }
@@ -512,8 +512,7 @@ namespace ungula::motor::tmc {
         // the configured accelMs — multiply by 1.25 so blanking covers the full
         // ramp, then add STALL_SETTLE_MARGIN_MS for post-cruise stabilisation.
         uint32_t paddedAccelMs = accelMs + (accelMs / 4U);
-        stallBlankUntilMs_ =
-                ungula::core::time::TimeControl::millis() + paddedAccelMs + STALL_SETTLE_MARGIN_MS;
+        stallBlankUntilMs_ = ungula::core::time::millis() + paddedAccelMs + STALL_SETTLE_MARGIN_MS;
 
         reconfigureStallForSpeed(speedSps);
     }
@@ -529,7 +528,7 @@ namespace ungula::motor::tmc {
             return;
         }
 
-        uint32_t nowMs = ungula::core::time::TimeControl::syncNow();
+        uint32_t nowMs = ungula::core::time::syncNow();
 
         const bool blanking = (nowMs < stallBlankUntilMs_);
         const bool lowSpeed = (targetSpeedSps_ < motor::stall::LOW_SPEED_SPS);

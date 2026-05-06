@@ -348,7 +348,7 @@ namespace ungula::motor {
             homing::IHomingStrategy* homingStrategy_ = nullptr;
             HomingPhase homingPhase_ = HomingPhase::None;
             // Wall-clock anchors stored as int64_t to match
-            // TimeControl::syncNow() return type — no silent narrowing.
+            // core::time::syncNow() return type — no silent narrowing.
             int64_t homingStartMs_ = 0;
             int64_t homingTimeoutMs_ = 0;
             bool isHomed_ = false;

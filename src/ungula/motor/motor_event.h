@@ -28,9 +28,9 @@ namespace ungula::motor {
             MotorFsmState previousState;
             MotorFsmState newState;
             int32_t positionSteps;
-            int64_t timestampMs;  /// Stamped with TimeControl::syncNow() at creation
+            int64_t timestampMs;  /// Stamped with core::time::syncNow() at creation
                                   /// time. Signed 64-bit to match the rest of the
-                                  /// time API (TimeControl::tick_ms_t) — no narrowing.
+                                  /// time API (core::time::tick_ms_t) — no narrowing.
     };
 
 }  // namespace ungula::motor
