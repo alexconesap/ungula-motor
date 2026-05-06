@@ -82,7 +82,7 @@
 ///
 namespace ungula::motor {
 
-    class LocalMotor : public IHomeableMotor {
+    class LocalMotor : public homing::IHomeableMotor {
         public:
             LocalMotor() = default;
 
@@ -104,7 +104,7 @@ namespace ungula::motor {
             /// outlive the motor. Pass nullptr to disable homing entirely
             /// (home() then becomes a no-op and isHoming()/isHomed() always
             /// return false).
-            void setHomingStrategy(IHomingStrategy* strategy);
+            void setHomingStrategy(homing::IHomingStrategy* strategy);
 
             /// @brief Optional wall-clock timeout for the homing sequence
             /// (ms). 0 = no timeout, the strategy decides when to give up.
@@ -345,7 +345,7 @@ namespace ungula::motor {
                 Failed    /// Last run was aborted or failed.
             };
 
-            IHomingStrategy* homingStrategy_ = nullptr;
+            homing::IHomingStrategy* homingStrategy_ = nullptr;
             HomingPhase homingPhase_ = HomingPhase::None;
             // Wall-clock anchors stored as int64_t to match
             // TimeControl::syncNow() return type — no silent narrowing.

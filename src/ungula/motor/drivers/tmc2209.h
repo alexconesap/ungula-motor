@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <motor/i_motor_driver.h>
-#include <motor/stall_detector.h>
+#include <ungula/motor/i_motor_driver.h>
+#include <ungula/motor/stall_detector.h>
 #include <ungula/hal/gpio/gpio_access.h>
 #include <ungula/hal/uart/uart.h>
 #include <cstdint>

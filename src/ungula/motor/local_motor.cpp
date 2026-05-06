@@ -47,7 +47,7 @@ namespace ungula::motor {
         }
     }
 
-    void LocalMotor::setHomingStrategy(IHomingStrategy* strategy) {
+    void LocalMotor::setHomingStrategy(ungula::motor::homing::IHomingStrategy* strategy) {
         homingStrategy_ = strategy;
     }
 

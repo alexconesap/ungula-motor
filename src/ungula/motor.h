@@ -13,14 +13,14 @@
 // It pulls in platform-independent types, interfaces, and utilities.
 //
 // Platform-dependent components must be included explicitly:
-//   #include <motor/motor_fsm.h>                          // needs time/time_control.h
-//   #include <motor/limit_switch.h>                       // needs hal/gpio/gpio_access.h
-//   #include <motor/step_generator.h>                     // needs ESP-IDF gptimer
-//   #include <motor/local_motor.h>                        // needs ESP-IDF esp_timer
-//   #include <motor/drivers/tmc2209.h>                    // needs hal/uart, hal/gpio
-//   #include <motor/homing/homing_runner.h>               // needs LocalMotor
-//   #include <motor/homing/stall_homing_strategy.h>       // needs LocalMotor
-//   #include <motor/homing/limit_switch_homing_strategy.h>
+//   #include <ungula/motor/motor_fsm.h>                          // needs time/time_control.h
+//   #include <ungula/motor/limit_switch.h>                       // needs hal/gpio/gpio_access.h
+//   #include <ungula/motor/step_generator.h>                     // needs ESP-IDF gptimer
+//   #include <ungula/motor/local_motor.h>                        // needs ESP-IDF esp_timer
+//   #include <ungula/motor/drivers/tmc2209.h>                    // needs hal/uart, hal/gpio
+//   #include <ungula/motor/homing/homing_runner.h>               // needs LocalMotor
+//   #include <ungula/motor/homing/stall_homing_strategy.h>       // needs LocalMotor
+//   #include <ungula/motor/homing/limit_switch_homing_strategy.h>
 
 // Depend on UngulaCore — must be included first so Arduino CLI
 // discovers lib/ include paths before our headers reference them.
