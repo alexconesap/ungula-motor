@@ -30,6 +30,7 @@ namespace motor {
     void IRAM_ATTR StepGenerator::handleStepIsr() {
         portENTER_CRITICAL_ISR(&g_stepMux);
 
+        // @TODO check if we can skip this code. It is really defensive and it happens ALWAYS while the timer is running.
         if (!running_) {
             stepPinState_ = false;
             portEXIT_CRITICAL_ISR(&g_stepMux);
