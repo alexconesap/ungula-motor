@@ -11,9 +11,9 @@
 namespace {
 
     using ungula::motor::Direction;
-    using ungula::motor::homing::LimitSwitchHomingStrategy;
     using ungula::motor::MotionProfile;
     using ungula::motor::MotorFsmState;
+    using ungula::motor::homing::LimitSwitchHomingStrategy;
     using ungula::motor::test::MockHomeableMotor;
 
     LimitSwitchHomingStrategy::Config makeConfig(bool finalApproach = true) {

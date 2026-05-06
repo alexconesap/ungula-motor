@@ -14,6 +14,7 @@
 
 namespace {
 
+    using test_helpers::RecordingSink;
     using ungula::motor::Direction;
     using ungula::motor::DistanceUnit;
     using ungula::motor::MotionProfileSpec;
@@ -21,7 +22,6 @@ namespace {
     using ungula::motor::MotorFsmState;
     using ungula::motor::RemoteMotor;
     using ungula::motor::StopReason;
-    using test_helpers::RecordingSink;
 
     // ---- Initial state ----
 

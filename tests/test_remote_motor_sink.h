@@ -44,7 +44,8 @@ namespace test_helpers {
                 moves.push_back({motorId, command, params});
                 return true;
             }
-            bool sendProfile(uint8_t motorId, const ungula::motor::MotionProfileSpec& profile) override {
+            bool sendProfile(uint8_t motorId,
+                             const ungula::motor::MotionProfileSpec& profile) override {
                 profiles.push_back({motorId, profile});
                 return true;
             }
