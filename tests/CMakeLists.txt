@@ -76,16 +76,16 @@ target_link_libraries(test_ungula_motor gtest_main)
 # only on IHomeableMotor, so MockHomeableMotor gives us full coverage of
 # stall/limit-switch logic without esp_timer, gptimer or a real driver.
 #
-# The HomingRunner source pulls in <time/time_control.h> from UngulaCore.
+# The HomingRunner source pulls in <ungula/core/time/time_control.h> from UngulaCore.
 # We already add LIB_SRC to the include paths above, so it resolves.
 # ---------------------------------------------------------------------------
 add_executable(test_ungula_motor_homing
     test_stall_homing_strategy.cpp
     test_limit_switch_homing_strategy.cpp
     test_homing_runner.cpp
-    ${LIB_MOTOR_SRC}/motor/homing/stall_homing_strategy.cpp
-    ${LIB_MOTOR_SRC}/motor/homing/limit_switch_homing_strategy.cpp
-    ${LIB_MOTOR_SRC}/motor/homing/homing_runner.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/homing/stall_homing_strategy.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/homing/limit_switch_homing_strategy.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/homing/homing_runner.cpp
 )
 target_link_libraries(test_ungula_motor_homing gtest_main)
 
@@ -100,8 +100,8 @@ add_executable(test_ungula_motor_core
     test_motor_event_publisher.cpp
     test_remote_motor.cpp
     test_motor_coordinator.cpp
-    ${LIB_MOTOR_SRC}/motor/motor_fsm.cpp
-    ${LIB_MOTOR_SRC}/motor/remote_motor.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/motor_fsm.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/remote_motor.cpp
 )
 target_link_libraries(test_ungula_motor_core gtest_main)
 

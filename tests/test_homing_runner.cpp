@@ -4,17 +4,17 @@
 
 #include <gtest/gtest.h>
 
-#include <motor/homing/homing_runner.h>
-#include <motor/homing/i_homing_strategy.h>
+#include <ungula/motor/homing/homing_runner.h>
+#include <ungula/motor/homing/i_homing_strategy.h>
 
 #include "mock_homeable_motor.h"
 
 namespace {
 
-    using motor::HomingRunner;
-    using motor::IHomeableMotor;
-    using motor::IHomingStrategy;
-    using motor::test::MockHomeableMotor;
+    using ungula::motor::homing::HomingRunner;
+    using ungula::motor::homing::IHomeableMotor;
+    using ungula::motor::homing::IHomingStrategy;
+    using ungula::motor::test::MockHomeableMotor;
 
     // Scripted strategy so we can drive the runner deterministically.
     class ScriptedStrategy : public IHomingStrategy {

@@ -4,17 +4,17 @@
 
 #include <gtest/gtest.h>
 
-#include <motor/homing/stall_homing_strategy.h>
+#include <ungula/motor/homing/stall_homing_strategy.h>
 
 #include "mock_homeable_motor.h"
 
 namespace {
 
-    using motor::Direction;
-    using motor::MotionProfile;
-    using motor::MotorFsmState;
-    using motor::StallHomingStrategy;
-    using motor::test::MockHomeableMotor;
+    using ungula::motor::Direction;
+    using ungula::motor::MotionProfile;
+    using ungula::motor::MotorFsmState;
+    using ungula::motor::homing::StallHomingStrategy;
+    using ungula::motor::test::MockHomeableMotor;
 
     StallHomingStrategy::Config makeConfig(bool finalApproach = true) {
         StallHomingStrategy::Config cfg;

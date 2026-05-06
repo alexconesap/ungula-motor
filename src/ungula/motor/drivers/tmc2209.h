@@ -1,0 +1,523 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2024-2026 Alex Conesa
+// See LICENSE file for details.
+
+#pragma once
+
+#include <motor/i_motor_driver.h>
+#include <motor/stall_detector.h>
+#include <ungula/hal/gpio/gpio_access.h>
+#include <ungula/hal/uart/uart.h>
+#include <cstdint>
+
+/// @brief TMC2209 stepper driver over UART.
+/// Owns all GPIO pins (STEP, EN, DIR, DIAG) and the complete stall
+/// detection pipeline: DIAG pin polling, SG_RESULT register reads,
+/// speed-based thresholds, blanking during acceleration, and scoring.
+
+namespace ungula::motor::tmc {
+
+    // ---- TMC2209 identification ----
+    constexpr uint8_t TMC2209_VERSION_ID = 0x21;
+
+    // ---- UART protocol constants ----
+    constexpr uint8_t SYNC_BYTE = 0x05;
+    constexpr uint8_t WRITE_FLAG = 0x80;
+    constexpr uint8_t REPLY_MASTER_ADDR = 0xFF;
+    constexpr uint8_t CRC_POLYNOMIAL = 0x07;
+    constexpr uint8_t BITS_PER_BYTE = 8;
+    constexpr uint8_t WRITE_DATAGRAM_LEN = 8;
+    constexpr uint8_t READ_REQUEST_LEN = 4;
+    constexpr uint8_t READ_REPLY_LEN = 8;
+    constexpr uint8_t READ_BUF_SIZE = 16;
+    constexpr uint32_t ECHO_TIMEOUT_MS = 10;
+    constexpr uint32_t REPLY_TIMEOUT_MS = 20;
+    constexpr uint32_t INTER_DATAGRAM_MS = 2;
+
+    // ---- GSTAT clear mask ----
+    constexpr uint8_t GSTAT_CLEAR_ALL = 0x07;
+
+    // ---- Current scale limits (5-bit field in IHOLD_IRUN) ----
+    constexpr uint8_t CS_MAX = 31;
+    constexpr uint8_t CS_MIN = 0;
+    constexpr uint8_t CS_VSENSE_THRESHOLD = 16;
+
+    // ---- Current calculation (from TMC2209 datasheet) ----
+    constexpr float CS_STEPS = 32.0F;
+    constexpr float VFS_STANDARD = 0.325F;
+    constexpr float VFS_HIGH_SENS = 0.180F;
+    constexpr float RSENSE_INTERNAL = 0.02F;
+    constexpr float SQRT2 = 1.41421356F;
+    constexpr float MA_PER_AMP = 1000.0F;
+
+    // ---- Register addresses ----
+    namespace reg {
+        constexpr uint8_t GCONF = 0x00;
+        constexpr uint8_t GSTAT = 0x01;
+        constexpr uint8_t IFCNT = 0x02;
+        constexpr uint8_t IOIN = 0x06;
+        constexpr uint8_t IHOLD_IRUN = 0x10;
+        constexpr uint8_t TPOWERDOWN = 0x11;
+        constexpr uint8_t TPWMTHRS = 0x13;
+        constexpr uint8_t TCOOLTHRS = 0x14;
+        constexpr uint8_t SGTHRS = 0x40;
+        constexpr uint8_t SG_RESULT = 0x41;
+        constexpr uint8_t COOLCONF = 0x42;
+        constexpr uint8_t MSCNT = 0x6A;
+        constexpr uint8_t CHOPCONF = 0x6C;
+        constexpr uint8_t DRV_STATUS = 0x6F;
+        constexpr uint8_t PWMCONF = 0x70;
+    }  // namespace reg
+
+    // ---- GCONF bits ----
+    namespace gconf {
+        constexpr uint32_t I_SCALE_ANALOG = 1U << 0;
+        constexpr uint32_t INTERNAL_RSENSE = 1U << 1;
+        constexpr uint32_t EN_SPREADCYCLE = 1U << 2;
+        constexpr uint32_t SHAFT = 1U << 3;
+        constexpr uint32_t INDEX_OTPW = 1U << 4;
+        constexpr uint32_t INDEX_STEP = 1U << 5;
+        constexpr uint32_t PDN_DISABLE = 1U << 6;
+        constexpr uint32_t MSTEP_REG_SEL = 1U << 7;
+        constexpr uint32_t MULTISTEP_FILT = 1U << 8;
+    }  // namespace gconf
+
+    // ---- CHOPCONF bits/masks ----
+    namespace chop {
+        constexpr uint32_t TOFF_MASK = 0x0FU;
+        constexpr int32_t HSTRT_SHIFT = 4;
+        constexpr uint32_t HSTRT_MASK = 0x07U << 4;
+        constexpr int32_t HEND_SHIFT = 7;
+        constexpr uint32_t HEND_MASK = 0x0FU << 7;
+        constexpr int32_t TBL_SHIFT = 15;
+        constexpr uint32_t TBL_MASK = 0x03U << 15;
+        constexpr uint32_t VSENSE = 1U << 17;
+        constexpr int32_t MRES_SHIFT = 24;
+        constexpr uint32_t MRES_MASK = 0x0FU << 24;
+        constexpr uint32_t INTPOL = 1U << 28;
+        constexpr uint32_t DEDGE = 1U << 29;
+        constexpr uint32_t DISS2G = 1U << 30;
+        constexpr uint32_t DISS2VS = 1U << 31;
+    }  // namespace chop
+
+    // ---- PWMCONF bits/masks ----
+    namespace pwm {
+        constexpr uint32_t OFS_MASK = 0xFFU;
+        constexpr int32_t GRAD_SHIFT = 8;
+        constexpr uint32_t GRAD_MASK = 0xFFU << 8;
+        constexpr int32_t FREQ_SHIFT = 16;
+        constexpr uint32_t FREQ_MASK = 0x03U << 16;
+        constexpr uint32_t AUTOSCALE = 1U << 18;
+        constexpr uint32_t AUTOGRAD = 1U << 19;
+        constexpr int32_t FREEWHEEL_SHIFT = 20;
+        constexpr uint32_t FREEWHEEL_MASK = 0x03U << 20;
+        constexpr int32_t REG_SHIFT = 24;
+        constexpr uint32_t REG_MASK = 0x0FU << 24;
+        constexpr int32_t LIM_SHIFT = 28;
+        constexpr uint32_t LIM_MASK = 0x0FU << 28;
+    }  // namespace pwm
+
+    // ---- IHOLD_IRUN bits/masks ----
+    namespace ihr {
+        constexpr uint32_t IHOLD_MASK = 0x1FU;
+        constexpr int32_t IRUN_SHIFT = 8;
+        constexpr uint32_t IRUN_MASK = 0x1FU << 8;
+        constexpr int32_t IHOLDDELAY_SHIFT = 16;
+        constexpr uint32_t IHOLDDELAY_MASK = 0x0FU << 16;
+    }  // namespace ihr
+
+    // ---- IOIN bits (read-only) ----
+    namespace ioin {
+        constexpr int32_t VERSION_SHIFT = 24;
+        constexpr uint32_t VERSION_MASK = 0xFFU << 24;
+    }  // namespace ioin
+
+    // ---- DRV_STATUS bits (read-only) ----
+    namespace drv {
+        constexpr uint32_t OVERTEMP_WARN = 1U << 0;
+        constexpr uint32_t OVERTEMP = 1U << 1;
+        constexpr uint32_t SHORT_GND_A = 1U << 2;
+        constexpr uint32_t SHORT_GND_B = 1U << 3;
+        constexpr uint32_t SHORT_VS_A = 1U << 4;
+        constexpr uint32_t SHORT_VS_B = 1U << 5;
+        constexpr uint32_t OPEN_LOAD_A = 1U << 6;
+        constexpr uint32_t OPEN_LOAD_B = 1U << 7;
+        constexpr uint32_t TEMP_120C = 1U << 8;
+        constexpr uint32_t TEMP_143C = 1U << 9;
+        constexpr uint32_t TEMP_150C = 1U << 10;
+        constexpr uint32_t TEMP_157C = 1U << 11;
+        constexpr int32_t CS_ACTUAL_SHIFT = 16;
+        constexpr uint32_t CS_ACTUAL_MASK = 0x1FU << 16;
+        constexpr uint32_t STEALTH_MODE = 1U << 30;
+        constexpr uint32_t STANDSTILL = 1U << 31;
+    }  // namespace drv
+
+    // ---- Datasheet reset values for the cached registers ----
+    //
+    // begin() seeds the local register cache with these BEFORE applying
+    // any host setting. Reading them back from the chip is best-effort —
+    // single-wire UART can fail silently, and a read that returns 0
+    // would otherwise zero-out fields we never touch (PWM_OFS, PWM_FREQ,
+    // PWM_REG, PWM_LIM, multistep_filt …) the next time we write the
+    // register. Seeding from the datasheet preserves those fields.
+    namespace reset {
+        constexpr uint32_t GCONF = 0x00000101;       // I_scale_analog=1, multistep_filt=1
+        constexpr uint32_t CHOPCONF = 0x10000053;    // TOFF=3, TBL=2, HEND=0, MRES=0, intpol=0
+        constexpr uint32_t PWMCONF = 0xC10D0024;     // PWM_OFS=0x24, PWM_FREQ=1, autoscale=1,
+                                                     // autograd=1, PWM_REG=1, PWM_LIM=0xC
+        constexpr uint32_t IHOLD_IRUN = 0x00071703;  // IHOLD=3, IRUN=23, IHOLDDELAY=7
+    }  // namespace reset
+
+    // ---- Sensible defaults applied by begin() ----
+    //
+    // These match the historic working profile of the OLD basic_motor stack
+    // (TMCStepper-based): SpreadCycle always on for stable torque under load,
+    // tight chopper hysteresis (HSTRT=5/HEND=2), TBL=2 (36 clocks), 30% hold.
+    //
+    // Host projects override per-field via Tmc2209::Config + setConfig()
+    // before begin(). Other applications that want StealthChop, looser
+    // hysteresis, etc. can flip individual fields without touching this header.
+    namespace defaults {
+        constexpr uint8_t TOFF = 5;
+        constexpr uint16_t MICROSTEPS = 16;
+        constexpr uint16_t RUN_CURRENT_MA = 1000;
+        constexpr float HOLD_FRACTION = 0.30F;
+        constexpr bool PWM_AUTOSCALE = false;
+        constexpr bool PWM_AUTOGRAD = false;
+        constexpr bool SPREAD_CYCLE = true;
+        constexpr bool PDN_DISABLE = true;
+        constexpr bool ISCALE_ANALOG = false;
+        constexpr bool INTERNAL_RSENSE = false;
+        constexpr uint8_t BLANK_TIME = 2;  // TBL=2 → 36 clocks
+        constexpr uint8_t HSTRT = 5;       // CHOPCONF HSTRT (0..7)
+        constexpr uint8_t HEND = 2;        // CHOPCONF HEND  (0..15)
+        constexpr bool INTERPOL = true;
+        constexpr uint8_t IHOLDDELAY = 10;
+        constexpr uint8_t TPOWERDOWN = 20;
+        constexpr uint32_t TPWMTHRS = 0;  // 0 = StealthChop never auto-engages
+    }  // namespace defaults
+
+    /// @brief Driver init parameters applied by begin().
+    ///
+    /// Defaults match the OLD basic_motor profile (SpreadCycle, tight
+    /// hysteresis, 30% hold). Host projects override per field before
+    /// begin() via Tmc2209::setConfig(). Anything not touched keeps
+    /// the default value above.
+    struct Config {
+            uint8_t toff = defaults::TOFF;
+            uint16_t microsteps = defaults::MICROSTEPS;
+            uint16_t runCurrentMa = defaults::RUN_CURRENT_MA;
+            float holdFraction = defaults::HOLD_FRACTION;
+            bool pwmAutoscale = defaults::PWM_AUTOSCALE;
+            bool pwmAutograd = defaults::PWM_AUTOGRAD;
+            bool spreadCycle = defaults::SPREAD_CYCLE;
+            bool pdnDisable = defaults::PDN_DISABLE;
+            bool iScaleAnalog = defaults::ISCALE_ANALOG;
+            bool internalRsense = defaults::INTERNAL_RSENSE;
+            uint8_t blankTime = defaults::BLANK_TIME;
+            uint8_t hstrt = defaults::HSTRT;
+            uint8_t hend = defaults::HEND;
+            bool interpol = defaults::INTERPOL;
+            uint8_t iholddelay = defaults::IHOLDDELAY;
+            uint8_t tpowerdown = defaults::TPOWERDOWN;
+            uint32_t tpwmthrs = defaults::TPWMTHRS;
+    };
+
+    // ---- TCOOLTHRS calculation constants ----
+    constexpr float TMC_FCLK = 12000000.0F;
+    constexpr float TMC_INTERNAL_USTEPS = 256.0F;
+    constexpr float TCOOLTHRS_MARGIN = 1.5F;
+    constexpr uint32_t STALL_SETTLE_MARGIN_MS = 300;
+
+    // ---- Stall detection configuration ----
+
+    /// @brief Per-direction stall tuning parameters.
+    ///
+    /// Real motor mechanics are asymmetric by direction — friction, gravity,
+    /// and cable drag differ between FORWARD and BACKWARD. Using separate
+    /// profiles lets you tune each direction independently instead of
+    /// compromising on a single threshold that is too tight in one direction
+    /// and too loose in the other.
+    struct StallProfile {
+            /// StallGuard sensitivity (0-255). Higher = more sensitive.
+            /// Stall triggers on the DIAG path when SG_RESULT < 2 × sensitivity.
+            uint8_t sensitivity = 0;
+
+            /// DIAG pin path: score increments needed to confirm a stall.
+            int32_t diagConfirmCount = motor::stall::DEFAULT_DIAG_SCORE_LIMIT;
+
+            /// SG_RESULT per step-per-second — the motor's load characteristic slope.
+            /// Measured once at known speed with no load: SG ÷ speed.
+            float sgSlope = motor::stall::DEFAULT_SG_PER_SPS;
+
+            /// Maximum baseline value — SG_RESULT saturates at high speeds.
+            /// Set to ~80% of observed SG at the highest operating speed.
+            uint16_t sgMaxBaseline = motor::stall::DEFAULT_SG_BASELINE_CAP;
+
+            /// How far SG must drop from the speed-based baseline to count as
+            /// a stall reading (0.0–1.0). Lower = less sensitive.
+            float sgDropFraction = motor::stall::DEFAULT_STALL_FRACTION;
+
+            /// Net stall-readings needed to confirm a stall via SG_RESULT path.
+            int32_t sgConfirmCount = motor::stall::DEFAULT_SG_SCORE_LIMIT;
+    };
+
+    /// @brief Full stall detection configuration: hardware pin + per-direction tuning.
+    ///
+    /// Set `diagPin` to the GPIO connected to the TMC2209 DIAG output.
+    /// Tune `forward` and `backward` independently for asymmetric loads.
+    /// Use `StallConfig::symmetric()` when both directions have the same profile.
+    ///
+    /// Pass to Tmc2209::configureStall() before begin().
+    struct StallConfig {
+            /// DIAG output pin on the driver (GPIO_NONE = not wired, DIAG path disabled).
+            uint8_t diagPin = motor::GPIO_NONE;
+
+            /// Stall tuning applied when the motor moves in FORWARD direction.
+            StallProfile forward;
+
+            /// Stall tuning applied when the motor moves in BACKWARD direction.
+            StallProfile backward;
+
+            /// Convenience: identical profile for both directions.
+            static StallConfig symmetric(uint8_t pin, const StallProfile& profile) {
+                StallConfig cfg;
+                cfg.diagPin = pin;
+                cfg.forward = profile;
+                cfg.backward = profile;
+                return cfg;
+            }
+    };
+
+    /// @brief TMC2209 stepper motor driver — UART register-level control.
+    ///
+    /// Caches GCONF, CHOPCONF, PWMCONF, and IHOLD_IRUN locally to avoid
+    /// read-modify-write round-trips on every field change. Call begin()
+    /// once to sync the cache and apply sensible defaults.
+    ///
+    /// Owns stall detection: DIAG pin polling, SG_RESULT register reads,
+    /// speed-based thresholds, and blanking during acceleration.
+    class Tmc2209 : public motor::IMotorDriver {
+        public:
+            /// @param uart      UART port connected to TMC2209 PDN_UART.
+            /// @param rSense    External sense resistor value in ohms.
+            /// @param stepPin   GPIO for step pulse input on the driver.
+            /// @param enablePin GPIO for enable (active LOW).
+            /// @param dirPin    GPIO for direction control.
+            /// @param address   UART slave address (0-3, set by MS1/MS2 at boot).
+            Tmc2209(ungula::hal::uart::Uart& uart, float rSense, uint8_t stepPin, uint8_t enablePin,
+                    uint8_t dirPin, uint8_t address = 0);
+
+            // ---- IMotorDriver interface ----
+
+            const char* module() const override;
+            const char* info() const override;
+            void begin() override;
+            void enable() override;
+            void disable() override;
+            uint8_t version() override;
+
+            void setDirection(motor::Direction dir) override;
+            uint8_t stepPin() const override;
+            void setDirectionInverted(bool inverted) override;
+            void setMicrosteps(uint16_t microsteps) override;
+            void setRunCurrent(uint16_t milliAmps) override;
+
+            /// @brief Last DRV_STATUS value read by the service timer.
+            /// Returns a cached value — no UART read. Updated every
+            /// svc::SG_POLL_INTERVAL_MS (50 ms) while the motor is moving,
+            /// but only when stall detection is enabled (sensitivity > 0).
+            /// Returns 0 if stall detection is not configured.
+            /// Safe to call from any context including the main loop.
+            uint32_t lastDrvStatus() override;
+
+            // Stall detection lifecycle (IMotorDriver)
+            void prepareStallDetection(int32_t speedSps, uint32_t accelMs) override;
+            void updateStallDetectionSpeed(int32_t speedSps) override;
+            void serviceStallDetection() override;
+            bool isStalling() const override;
+            void clearStall() override;
+
+            motor::StallTelemetry stallTelemetry() const override {
+                bool diagFired = stallDetector_.isDiagStalling();
+                bool sgFired = stallDetector_.isRegisterStalling();
+                motor::StallCause cause;
+                if (diagFired && sgFired)
+                    cause = motor::StallCause::Both;
+                else if (diagFired)
+                    cause = motor::StallCause::Diag;
+                else if (sgFired)
+                    cause = motor::StallCause::Register;
+                else
+                    cause = motor::StallCause::None;
+                return {
+                        cause,
+                        stallDetector_.diagScoreNow(),
+                        stallDetector_.diagScoreLimitNow(),
+                        stallDetector_.sgScoreNow(),
+                        stallDetector_.sgScoreLimitNow(),
+                        lastSgResult_,
+                        stallDetector_.sgThresholdNow(),
+                        stallDetector_.sgBaselineNow(),
+                };
+            }
+
+            // ---- Stall detection configuration (TMC2209-specific) ----
+
+            /// @brief Configure all stall detection parameters at once.
+            /// Call before begin(). Fields not set use sensible defaults.
+            void configureStall(const StallConfig& config);
+
+            /// @brief Change StallGuard sensitivity at runtime (0-255).
+            /// For initial setup, use configureStall() instead.
+            void setStallSensitivity(uint8_t sensitivity);
+
+            // ---- Stall diagnostics ----
+
+            /// @brief Current DIAG score (how close to triggering).
+            int32_t diagScore() const {
+                return stallDetector_.diagScoreNow();
+            }
+
+            /// @brief Current SG_RESULT score (how close to triggering).
+            int32_t sgScore() const {
+                return stallDetector_.sgScoreNow();
+            }
+
+            /// @brief Active SG threshold (speed-based).
+            uint16_t sgThreshold() const {
+                return stallDetector_.sgThresholdNow();
+            }
+
+            /// @brief Expected SG baseline at current speed.
+            uint16_t sgBaseline() const {
+                return stallDetector_.sgBaselineNow();
+            }
+
+            /// @brief Active StallGuard sensitivity (from the current direction's profile).
+            uint8_t stallSensitivity() const {
+                return activeProfile().sensitivity;
+            }
+
+            /// @brief Current DIAG score limit.
+            int32_t diagScoreLimit() const {
+                return stallDetector_.diagScoreLimitNow();
+            }
+
+            // ---- TMC2209-specific register access ----
+
+            void writeRegister(uint8_t regAddr, uint32_t value);
+            uint32_t readRegister(uint8_t regAddr);
+            static uint8_t calcCrc(const uint8_t* data, uint8_t length);
+
+            /// @brief Read every config register and emit them on the
+            /// logger. Use to compare driver state between firmware
+            /// versions on the same hardware.
+            void dumpRegisters(const char* tag);
+
+            /// @brief Read SG_RESULT result via a live UART transaction. 'Time consuming'.
+            /// Use `lastStallGuardResult()` for a cached value updated by the service timer.
+            uint16_t readStallGuardResult();
+
+            /// @brief Last SG_RESULT value cached.
+            /// Use `readStallGuardResult()` for live reads — this is only updated by the service
+            uint16_t lastStallGuardResult() const {
+                return lastSgResult_;
+            }
+
+            uint32_t clearGstat();
+
+            // ---- TMC2209-specific configuration ----
+
+            void setRunCurrent(uint16_t milliAmps, float holdFrac);
+            void setHoldFraction(float fraction) {
+                holdFraction_ = fraction;
+            }
+            void setInternalRsense(bool enable);
+            void setToff(uint8_t offTime);
+            void setBlankTime(uint8_t blankTime);
+            void setHstrt(uint8_t hstrt);
+            void setHend(uint8_t hend);
+            void setSpreadCycle(bool enable);
+            void setPdnDisable(bool disable);
+            void setIScaleAnalog(bool enable);
+            void setShaft(bool reverse);
+            void setInterpol(bool enable);
+            void setPwmAutoscale(bool enable);
+            void setPwmAutograd(bool enable);
+            void setIholddelay(uint8_t holdDelay);
+            void setTpowerdown(uint8_t powerDelay);
+            void setTpwmthrs(uint32_t threshold);
+            void setTcoolthrs(uint32_t threshold);
+            void setStallGuardThreshold(uint8_t threshold);
+
+            /// @brief Override the init parameters applied by begin().
+            /// Call before begin(). Fields not touched keep their default
+            /// value (see tmc::defaults). After begin() the same fields can
+            /// still be changed individually with the per-field setters.
+            void setConfig(const Config& config) {
+                config_ = config;
+            }
+            const Config& config() const {
+                return config_;
+            }
+
+        private:
+            static constexpr uint8_t INFO_BUF_SIZE = 48;
+
+            // Hardware connections
+            ungula::hal::uart::Uart& uart_;
+            float rSense_;
+            const uint8_t stepPin_;
+            const uint8_t enablePin_;
+            const uint8_t dirPin_;
+            uint8_t address_;
+            char infoBuf_[INFO_BUF_SIZE] = {};
+            float holdFraction_ = defaults::HOLD_FRACTION;
+            Config config_{};
+
+            // Cached register values — avoids read-modify-write round-trips
+            uint32_t gconf_ = 0;
+            uint32_t chopconf_ = 0;
+            uint32_t pwmconf_ = 0;
+            uint32_t iholdrun_ = 0;
+
+            // Stall detection state
+            uint8_t diagPin_ = motor::GPIO_NONE;
+            motor::StallDetector stallDetector_;
+            StallProfile stallProfileFwd_;
+            StallProfile stallProfileBwd_;
+            motor::Direction currentDirection_ = motor::Direction::FORWARD;
+            uint16_t microsteps_ = defaults::MICROSTEPS;
+            uint32_t stallBlankUntilMs_ = 0;
+            uint16_t lastSgResult_ = 0xFFFF;
+            uint32_t lastSgPollMs_ = 0;
+            int32_t targetSpeedSps_ = 0;
+
+            // Cached driver status
+            volatile uint32_t lastDrvStatus_ = 0;
+
+            // FreeRTOS mutex serialising UART access — prevents contention
+            // between the service timer's register polls and any direct
+            // readRegister / writeRegister calls from application code.
+            // Opaque here; cast to SemaphoreHandle_t in .cpp.
+            void* uartMutex_ = nullptr;
+
+            // Helpers
+            const StallProfile& activeProfile() const {
+                return (currentDirection_ == motor::Direction::BACKWARD) ? stallProfileBwd_
+                                                                         : stallProfileFwd_;
+            }
+            bool isStallDetectionEnabled() const {
+                return activeProfile().sensitivity != 0;
+            }
+            void applyProfile(const StallProfile& p);
+            void setBit(uint32_t& cache, uint8_t regAddr, uint32_t mask, bool value);
+            void setField(uint32_t& cache, uint8_t regAddr, uint32_t mask, uint32_t value);
+            void enableStallDetection();
+            void reconfigureStallForSpeed(int32_t speedSps);
+            static uint32_t computeTcoolthrs(int32_t speedSps, uint16_t microsteps);
+            static uint8_t mresFromMicrosteps(uint16_t microsteps);
+    };
+
+}  // namespace ungula::motor::tmc

@@ -7,18 +7,18 @@
 
 #include <gtest/gtest.h>
 
-#include <motor/motor_coordinator.h>
-#include <motor/remote_motor.h>
+#include <ungula/motor/motor_coordinator.h>
+#include <ungula/motor/remote_motor.h>
 
 #include "test_remote_motor_sink.h"
 
 namespace {
 
-    using motor::MotorCommandType;
-    using motor::MotorCoordinator;
-    using motor::MotorEvent;
-    using motor::MotorEventType;
-    using motor::MotorFsmState;
+    using ungula::motor::MotorCommandType;
+    using ungula::motor::MotorCoordinator;
+    using ungula::motor::MotorEvent;
+    using ungula::motor::MotorEventType;
+    using ungula::motor::MotorFsmState;
 
     // Use RemoteMotor as a concrete IMotor — its commands flow into a
     // counting sink so we can prove the coordinator dispatched to all
@@ -42,25 +42,25 @@ namespace {
     TEST(MotorCoordinatorTest, AddMotorRespectsCapacity) {
         MotorCoordinator coord;
         RecordingSink sink;
-        motor::RemoteMotor motors[motor::MAX_COORDINATOR_MOTORS + 1] = {
+        ungula::motor::RemoteMotor motors[ungula::motor::MAX_COORDINATOR_MOTORS + 1] = {
                 {sink, 0}, {sink, 1}, {sink, 2}, {sink, 3}, {sink, 4},
                 {sink, 5}, {sink, 6}, {sink, 7}, {sink, 8},
         };
-        for (uint8_t i = 0; i < motor::MAX_COORDINATOR_MOTORS; ++i) {
+        for (uint8_t i = 0; i < ungula::motor::MAX_COORDINATOR_MOTORS; ++i) {
             EXPECT_TRUE(coord.addMotor(&motors[i]));
         }
-        EXPECT_EQ(coord.motorCount(), motor::MAX_COORDINATOR_MOTORS);
+        EXPECT_EQ(coord.motorCount(), ungula::motor::MAX_COORDINATOR_MOTORS);
         // One past capacity → rejected.
-        EXPECT_FALSE(coord.addMotor(&motors[motor::MAX_COORDINATOR_MOTORS]));
-        EXPECT_EQ(coord.motorCount(), motor::MAX_COORDINATOR_MOTORS);
+        EXPECT_FALSE(coord.addMotor(&motors[ungula::motor::MAX_COORDINATOR_MOTORS]));
+        EXPECT_EQ(coord.motorCount(), ungula::motor::MAX_COORDINATOR_MOTORS);
     }
 
     TEST(MotorCoordinatorTest, EnableAllReachesEveryRegisteredMotor) {
         MotorCoordinator coord;
         RecordingSink sink;
-        motor::RemoteMotor m1(sink, /*id=*/10);
-        motor::RemoteMotor m2(sink, /*id=*/20);
-        motor::RemoteMotor m3(sink, /*id=*/30);
+        ungula::motor::RemoteMotor m1(sink, /*id=*/10);
+        ungula::motor::RemoteMotor m2(sink, /*id=*/20);
+        ungula::motor::RemoteMotor m3(sink, /*id=*/30);
         coord.addMotor(&m1);
         coord.addMotor(&m2);
         coord.addMotor(&m3);
@@ -79,8 +79,8 @@ namespace {
     TEST(MotorCoordinatorTest, EmergencyStopAllReachesEveryRegisteredMotor) {
         MotorCoordinator coord;
         RecordingSink sink;
-        motor::RemoteMotor m1(sink, 1);
-        motor::RemoteMotor m2(sink, 2);
+        ungula::motor::RemoteMotor m1(sink, 1);
+        ungula::motor::RemoteMotor m2(sink, 2);
         coord.addMotor(&m1);
         coord.addMotor(&m2);
 
@@ -94,8 +94,8 @@ namespace {
     TEST(MotorCoordinatorTest, MotorIndexAccessor) {
         MotorCoordinator coord;
         RecordingSink sink;
-        motor::RemoteMotor m1(sink, 1);
-        motor::RemoteMotor m2(sink, 2);
+        ungula::motor::RemoteMotor m1(sink, 1);
+        ungula::motor::RemoteMotor m2(sink, 2);
         coord.addMotor(&m1);
         coord.addMotor(&m2);
 
@@ -119,7 +119,7 @@ namespace {
         e.timestampMs = 1'700'000'000'000LL;
 
         // Cast through the interface so we exercise the virtual dispatch.
-        motor::IMotorEventListener& asListener = coord;
+        ungula::motor::IMotorEventListener& asListener = coord;
         asListener.onMotorEvent(e);
         // No public getter — but the call mustn't crash and the
         // override must be reachable. (If a getter is added later, this

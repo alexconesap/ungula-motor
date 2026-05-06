@@ -13,12 +13,12 @@ You create a `LocalMotor`, wire it to an `IMotorDriver` (e.g. `Tmc2209`), call `
 The motor seeds every motion profile that you did not configure with a safe default at `begin()` time (500 SPS, 500 ms ramp). That means a bare-bones project — driver + pins + `begin()` + `enable()` + `moveForward()` — actually moves at a slow, visible speed without any extra setup. Override any field with `setProfileSpeed/Accel/Decel()` before motion if you want a different feel.
 
 ```cpp
-#include <motor/local_motor.h>
-#include <motor/drivers/tmc2209.h>
+#include <ungula/motor/local_motor.h>
+#include <ungula/motor/drivers/tmc2209.h>
 
 // Driver owns STEP, EN, DIR pins and the UART
-tmc::Tmc2209 driver(uart, 0.11F, PIN_STEP, PIN_EN, PIN_DIR, /*addr=*/0);
-motor::LocalMotor mot;
+ungula::motor::tmc::Tmc2209 driver(uart, 0.11F, PIN_STEP, PIN_EN, PIN_DIR, /*addr=*/0);
+ungula::motor::LocalMotor mot;
 
 void setup() {
     mot.setDriver(driver);
@@ -37,15 +37,15 @@ That is the smallest project that compiles and runs on real hardware. From there
 ## Realistic project — limits, stall, and a homing strategy
 
 ```cpp
-#include <motor/local_motor.h>
-#include <motor/drivers/tmc2209.h>
-#include <motor/homing/limit_switch_homing_strategy.h>
+#include <ungula/motor/local_motor.h>
+#include <ungula/motor/drivers/tmc2209.h>
+#include <ungula/motor/homing/limit_switch_homing_strategy.h>
 
-tmc::Tmc2209 driver(uart, 0.11F, PIN_STEP, PIN_EN, PIN_DIR, /*addr=*/0);
-motor::LocalMotor mot;
+ungula::motor::tmc::Tmc2209 driver(uart, 0.11F, PIN_STEP, PIN_EN, PIN_DIR, /*addr=*/0);
+ungula::motor::LocalMotor mot;
 
-motor::LimitSwitchHomingStrategy::Config homingCfg;
-motor::LimitSwitchHomingStrategy homing(homingCfg);
+ungula::motor::LimitSwitchHomingStrategy::Config homingCfg;
+ungula::motor::LimitSwitchHomingStrategy homing(homingCfg);
 
 void setup() {
     mot.setDriver(driver);
@@ -61,11 +61,11 @@ void setup() {
     mot.setAutoStopOnStall(true);
 
     // Profiles — override the defaults for a faster jog
-    mot.setProfileSpeed(motor::MotionProfile::JOG, 10000);
-    mot.setProfileAccel(motor::MotionProfile::JOG, 500);
+    mot.setProfileSpeed(ungula::motor::MotionProfile::JOG, 10000);
+    mot.setProfileAccel(ungula::motor::MotionProfile::JOG, 500);
 
     // Homing strategy
-    homingCfg.homingDirection = motor::Direction::BACKWARD;
+    homingCfg.homingDirection = ungula::motor::Direction::BACKWARD;
     homingCfg.fastSpeedSps    = 3000;
     homingCfg.slowSpeedSps    = 500;
     homingCfg.backoffSteps    = 300;
@@ -81,7 +81,7 @@ void loop() {
 }
 
 void onJogForward() {
-    mot.setActiveProfile(motor::MotionProfile::JOG);
+    mot.setActiveProfile(ungula::motor::MotionProfile::JOG);
     mot.moveForward();
 }
 void onStop() { mot.stop(); }
@@ -153,23 +153,23 @@ The host should never need to reason about which FSM state the motor is currentl
 //  user pressed stop, or because it stalled?"
 if (mot.isIdle()) {
     switch (mot.lastStopReason()) {
-        case motor::StopReason::TargetReached: handleCycleComplete(); break;
-        case motor::StopReason::UserStop:      handleUserCancel();    break;
-        case motor::StopReason::Stall:         handleStallRecovery(); break;
-        case motor::StopReason::LimitHit:      handleLimitRecovery(); break;
-        case motor::StopReason::Fault:         handleFault();         break;
+        case ungula::motor::StopReason::TargetReached: handleCycleComplete(); break;
+        case ungula::motor::StopReason::UserStop:      handleUserCancel();    break;
+        case ungula::motor::StopReason::Stall:         handleStallRecovery(); break;
+        case ungula::motor::StopReason::LimitHit:      handleLimitRecovery(); break;
+        case ungula::motor::StopReason::Fault:         handleFault();         break;
         default: /* None / Disabled / EmergencyStop — nothing to do */ break;
     }
 }
 
 // "Is limit switch 0 on the backward side closed right now?"
-if (mot.isLimitActive(motor::Direction::BACKWARD, 0)) {
+if (mot.isLimitActive(ungula::motor::Direction::BACKWARD, 0)) {
     showHomeIndicator();
 }
 
 // "Sweep every registered limit on the forward side."
-for (int32_t i = 0; i < mot.limitCount(motor::Direction::FORWARD); ++i) {
-    if (mot.isLimitActive(motor::Direction::FORWARD, i)) {
+for (int32_t i = 0; i < mot.limitCount(ungula::motor::Direction::FORWARD); ++i) {
+    if (mot.isLimitActive(ungula::motor::Direction::FORWARD, i)) {
         // ...
     }
 }
@@ -219,14 +219,14 @@ Stall detection follows a strict split: the driver detects (DIAG pin, SG registe
 The included `Tmc2209` driver talks directly to the chip over UART — no TMCStepper Arduino library needed. It handles register-level communication, current scaling, microstepping, and dual-path stall detection (DIAG pin + SG_RESULT register).
 
 ```cpp
-#include <motor/drivers/tmc2209.h>
+#include <ungula/motor/drivers/tmc2209.h>
 
 // UART must be set up separately
-ungula::uart::Uart tmcUart(2);
+ungula::hal::uart::Uart tmcUart(2);
 tmcUart.begin(115200, PIN_TX, PIN_RX);
 
 // Driver owns STEP, EN, DIR pins
-tmc::Tmc2209 driver(tmcUart, 0.11F, PIN_STEP, PIN_EN, PIN_DIR);
+ungula::motor::tmc::Tmc2209 driver(tmcUart, 0.11F, PIN_STEP, PIN_EN, PIN_DIR);
 
 // Configure stall detection (optional, all-in-one)
 driver.configureStall({
@@ -267,10 +267,10 @@ The motor goes through 11 states automatically. `Decelerating` collapses straigh
 Subscribe to motor events to react without polling:
 
 ```cpp
-class MyListener : public motor::IMotorEventListener {
+class MyListener : public ungula::motor::IMotorEventListener {
 public:
-    void onMotorEvent(const motor::MotorEvent& event) override {
-        if (event.type == motor::MotorEventType::LimitSwitchHit) {
+    void onMotorEvent(const ungula::motor::MotorEvent& event) override {
+        if (event.type == ungula::motor::MotorEventType::LimitSwitchHit) {
             // handle limit
         }
     }
@@ -288,20 +288,20 @@ Three named profiles let you store different speed/ramp combinations:
 
 ```cpp
 // Fast jog for manual positioning
-mot.setProfileSpeed(motor::MotionProfile::JOG, 15000);
-mot.setProfileAccel(motor::MotionProfile::JOG, 300);
+mot.setProfileSpeed(ungula::motor::MotionProfile::JOG, 15000);
+mot.setProfileAccel(ungula::motor::MotionProfile::JOG, 300);
 
 // Slow homing toward limit switch
-mot.setProfileSpeed(motor::MotionProfile::HOMING, 2000);
-mot.setProfileAccel(motor::MotionProfile::HOMING, 500);
+mot.setProfileSpeed(ungula::motor::MotionProfile::HOMING, 2000);
+mot.setProfileAccel(ungula::motor::MotionProfile::HOMING, 500);
 
 // Production cycle speed
-mot.setProfileSpeed(motor::MotionProfile::CYCLE, 8000);
-mot.setProfileAccel(motor::MotionProfile::CYCLE, 400);
-mot.setProfileDecel(motor::MotionProfile::CYCLE, 200);
+mot.setProfileSpeed(ungula::motor::MotionProfile::CYCLE, 8000);
+mot.setProfileAccel(ungula::motor::MotionProfile::CYCLE, 400);
+mot.setProfileDecel(ungula::motor::MotionProfile::CYCLE, 200);
 
 // Select which profile is active
-mot.setActiveProfile(motor::MotionProfile::JOG);
+mot.setActiveProfile(ungula::motor::MotionProfile::JOG);
 mot.moveForward();  // uses JOG speed and ramp
 ```
 
@@ -309,11 +309,11 @@ mot.moveForward();  // uses JOG speed and ramp
 
 ```cpp
 // Move to absolute position (in steps, mm, cm, or degrees)
-mot.moveTo(1500.0F, motor::DistanceUnit::STEPS);
-mot.moveTo(25.0F, motor::DistanceUnit::MM);
+mot.moveTo(1500.0F, ungula::motor::DistanceUnit::STEPS);
+mot.moveTo(25.0F, ungula::motor::DistanceUnit::MM);
 
 // Move relative
-mot.moveBy(-10.0F, motor::DistanceUnit::MM);
+mot.moveBy(-10.0F, ungula::motor::DistanceUnit::MM);
 ```
 
 The step generator handles position tracking at ISR level with zero overshoot.
@@ -324,7 +324,7 @@ TMC2209-class drivers can change run current at runtime over UART. When the mech
 
 ```cpp
 // High torque at low speed (vertical axis holding a hot die assembly).
-motor::CurrentCurve curve;
+ungula::motor::CurrentCurve curve;
 curve.minSps = 200;
 curve.maxSps = 3000;
 curve.minMa  = 1300;   // slow → more current
@@ -349,15 +349,15 @@ Homing is a multi-step dance (approach → stop signal → back off → slow re-
 | `motor.home()` | Kick off homing using the installed strategy. Non-blocking. Cancels any in-progress motion first. |
 
 ```cpp
-#include <motor/homing/limit_switch_homing_strategy.h>
+#include <ungula/motor/homing/limit_switch_homing_strategy.h>
 
-motor::LimitSwitchHomingStrategy::Config cfg;
-cfg.homingDirection = motor::Direction::BACKWARD;
+ungula::motor::LimitSwitchHomingStrategy::Config cfg;
+cfg.homingDirection = ungula::motor::Direction::BACKWARD;
 cfg.fastSpeedSps    = 3000;
 cfg.slowSpeedSps    = 500;
 cfg.backoffSteps    = 300;
 
-motor::LimitSwitchHomingStrategy strategy(cfg);
+ungula::motor::LimitSwitchHomingStrategy strategy(cfg);
 
 void setup() {
     // ... driver wiring, profiles, limits ...
@@ -373,7 +373,7 @@ void onHomeButton() {
 
 void onStartCycle() {
     if (!mot.isHomed()) { reportError(); return; }
-    mot.moveTo(25.0F, motor::DistanceUnit::MM);
+    mot.moveTo(25.0F, ungula::motor::DistanceUnit::MM);
 }
 
 void loop() {
@@ -392,16 +392,16 @@ The strategy decides HOW to find the reference. Same motor, different strategy i
 **Stall homing** — no limit switch, drive into a hard mechanical stop and read the driver's stall signal (TMC2209 StallGuard, DIAG pin, etc.). The strategy forces `setAutoStopOnStall(true)` in `begin()` so the FSM actually transitions to `Stall` on detection.
 
 ```cpp
-#include <motor/homing/stall_homing_strategy.h>
+#include <ungula/motor/homing/stall_homing_strategy.h>
 
-motor::StallHomingStrategy::Config cfg;
-cfg.homingDirection = motor::Direction::BACKWARD;
+ungula::motor::StallHomingStrategy::Config cfg;
+cfg.homingDirection = ungula::motor::Direction::BACKWARD;
 cfg.fastSpeedSps    = 2000;
 cfg.slowSpeedSps    = 500;
 cfg.backoffSteps    = 200;
 cfg.finalApproach   = true;  // false = single-touch, faster but less repeatable
 
-motor::StallHomingStrategy strategy(cfg);
+ungula::motor::StallHomingStrategy strategy(cfg);
 mot.setHomingStrategy(&strategy);
 ```
 
@@ -417,7 +417,7 @@ Each motor owns its own homing run, so coordinating two axes is just two calls a
 mot_x.home();
 mot_y.home();
 while (mot_x.isHoming() || mot_y.isHoming()) {
-    ungula::TimeControl::delayMs(5);
+    ungula::core::time::TimeControl::delayMs(5);
 }
 if (!mot_x.isHomed() || !mot_y.isHomed()) { /* report / retry */ }
 ```
@@ -431,7 +431,7 @@ if (!mot_x.isHomed() || !mot_y.isHomed()) { /* report / retry */ }
 ```text
 src/
   ungula_motor.h            Aggregator header (Arduino discovery)
-  motor/                        Main motor system (motor:: namespace)
+  motor/                        Main motor system (ungula::motor:: namespace)
     motor_types.h               Enums, constants, value types
     motor_state.h               FSM state enum and names
     motor_event.h               Event types and MotorEvent struct

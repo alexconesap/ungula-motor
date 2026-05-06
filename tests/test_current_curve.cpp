@@ -4,12 +4,12 @@
 
 #include <gtest/gtest.h>
 
-#include <motor/motor_types.h>
+#include <ungula/motor/motor_types.h>
 
 namespace {
 
-    using motor::CurrentCurve;
-    using motor::currentMaForSps;
+    using ungula::motor::CurrentCurve;
+    using ungula::motor::currentMaForSps;
 
     CurrentCurve makeRisingCurve() {
         CurrentCurve c;

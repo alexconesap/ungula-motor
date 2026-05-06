@@ -7,12 +7,12 @@
 #include <cstdint>
 #include <vector>
 
-#include <motor/homing/i_homeable_motor.h>
-#include <motor/motion_profile.h>
-#include <motor/motor_state.h>
-#include <motor/motor_types.h>
+#include <ungula/motor/homing/i_homeable_motor.h>
+#include <ungula/motor/motion_profile.h>
+#include <ungula/motor/motor_state.h>
+#include <ungula/motor/motor_types.h>
 
-namespace motor {
+namespace ungula::motor {
     namespace test {
 
         /// @brief In-memory IHomeableMotor stand-in for strategy unit tests.
@@ -20,7 +20,7 @@ namespace motor {
         /// The mock records every call the strategy makes, lets the test script
         /// the reported FSM state from tick to tick, and tracks position/running
         /// flags so finish() behaves like a real motor. No hardware, no timers.
-        class MockHomeableMotor : public IHomeableMotor {
+        class MockHomeableMotor : public ungula::motor::homing::IHomeableMotor {
             public:
                 // ---- scripted inputs -----------------------------------------------
 
@@ -208,4 +208,4 @@ namespace motor {
         };
 
     }  // namespace test
-}  // namespace motor
+}  // namespace ungula::motor

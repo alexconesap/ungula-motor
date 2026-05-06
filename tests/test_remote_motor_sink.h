@@ -9,42 +9,42 @@
 // transport would have to deliver, so tests can assert sequencing and
 // payloads without involving real networking.
 
-#include <motor/i_motor_command_sink.h>
-#include <motor/motion_profile.h>
+#include <ungula/motor/i_motor_command_sink.h>
+#include <ungula/motor/motion_profile.h>
 
 #include <vector>
 
 namespace test_helpers {
 
-    struct RecordingSink final : public motor::IMotorCommandSink {
+    struct RecordingSink final : public ungula::motor::IMotorCommandSink {
             struct SimpleSent {
                     uint8_t id;
-                    motor::MotorCommandType cmd;
+                    ungula::motor::MotorCommandType cmd;
             };
             struct MoveSent {
                     uint8_t id;
-                    motor::MotorCommandType cmd;
-                    motor::MotorMoveParams params;
+                    ungula::motor::MotorCommandType cmd;
+                    ungula::motor::MotorMoveParams params;
             };
             struct ProfileSent {
                     uint8_t id;
-                    motor::MotionProfileSpec profile;
+                    ungula::motor::MotionProfileSpec profile;
             };
 
             std::vector<SimpleSent> simples;
             std::vector<MoveSent> moves;
             std::vector<ProfileSent> profiles;
 
-            bool send(uint8_t motorId, motor::MotorCommandType command) override {
+            bool send(uint8_t motorId, ungula::motor::MotorCommandType command) override {
                 simples.push_back({motorId, command});
                 return true;
             }
-            bool sendMove(uint8_t motorId, motor::MotorCommandType command,
-                          const motor::MotorMoveParams& params) override {
+            bool sendMove(uint8_t motorId, ungula::motor::MotorCommandType command,
+                          const ungula::motor::MotorMoveParams& params) override {
                 moves.push_back({motorId, command, params});
                 return true;
             }
-            bool sendProfile(uint8_t motorId, const motor::MotionProfileSpec& profile) override {
+            bool sendProfile(uint8_t motorId, const ungula::motor::MotionProfileSpec& profile) override {
                 profiles.push_back({motorId, profile});
                 return true;
             }

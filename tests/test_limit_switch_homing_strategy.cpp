@@ -4,17 +4,17 @@
 
 #include <gtest/gtest.h>
 
-#include <motor/homing/limit_switch_homing_strategy.h>
+#include <ungula/motor/homing/limit_switch_homing_strategy.h>
 
 #include "mock_homeable_motor.h"
 
 namespace {
 
-    using motor::Direction;
-    using motor::LimitSwitchHomingStrategy;
-    using motor::MotionProfile;
-    using motor::MotorFsmState;
-    using motor::test::MockHomeableMotor;
+    using ungula::motor::Direction;
+    using ungula::motor::homing::LimitSwitchHomingStrategy;
+    using ungula::motor::MotionProfile;
+    using ungula::motor::MotorFsmState;
+    using ungula::motor::test::MockHomeableMotor;
 
     LimitSwitchHomingStrategy::Config makeConfig(bool finalApproach = true) {
         LimitSwitchHomingStrategy::Config cfg;

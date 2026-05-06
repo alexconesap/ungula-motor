@@ -7,17 +7,17 @@
 
 #include <gtest/gtest.h>
 
-#include <motor/motor_event.h>
-#include <motor/motor_event_publisher.h>
+#include <ungula/motor/motor_event.h>
+#include <ungula/motor/motor_event_publisher.h>
 
 namespace {
 
-    using motor::MotorEvent;
-    using motor::MotorEventPublisher;
-    using motor::MotorEventType;
-    using motor::MotorFsmState;
+    using ungula::motor::MotorEvent;
+    using ungula::motor::MotorEventPublisher;
+    using ungula::motor::MotorEventType;
+    using ungula::motor::MotorFsmState;
 
-    class CountingListener : public motor::IMotorEventListener {
+    class CountingListener : public ungula::motor::IMotorEventListener {
         public:
             int hits = 0;
             MotorEvent last{};

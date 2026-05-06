@@ -15,19 +15,19 @@ event/coordinator logic only.
 
 Two namespaces:
 
-- `motor::` — everything in this library.
-- `tmc::` — the TMC2209 driver (in `motor/drivers/tmc2209.h`).
+- `ungula::motor::` — everything in this library.
+- `ungula::motor::tmc::` — the TMC2209 driver (in `ungula/motor/drivers/tmc2209.h`).
 
-Umbrella header: `<ungula_motor.h>` brings in interfaces, types,
+Umbrella header: `<ungula/motor.h>` brings in interfaces, types,
 `MotorEventPublisher`, `RemoteMotor`, and `MotorCoordinator`. **Platform
 pieces are not auto-included** — bring them in explicitly:
 
 ```cpp
-#include <motor/local_motor.h>           // ESP-IDF gptimer + esp_timer
-#include <motor/drivers/tmc2209.h>       // UART + GPIO
-#include <motor/homing/limit_switch_homing_strategy.h>
-#include <motor/homing/stall_homing_strategy.h>
-#include <motor/homing/homing_runner.h>  // standalone runner (advanced)
+#include <ungula/motor/local_motor.h>           // ESP-IDF gptimer + esp_timer
+#include <ungula/motor/drivers/tmc2209.h>       // UART + GPIO
+#include <ungula/motor/homing/limit_switch_homing_strategy.h>
+#include <ungula/motor/homing/stall_homing_strategy.h>
+#include <ungula/motor/homing/homing_runner.h>  // standalone runner (advanced)
 ```
 
 ---
@@ -37,13 +37,13 @@ pieces are not auto-included** — bring them in explicitly:
 ### Use case: Bare minimum — driver, pins, run
 
 ```cpp
-#include <motor/local_motor.h>
-#include <motor/drivers/tmc2209.h>
-#include <hal/uart/uart.h>
+#include <ungula/motor/local_motor.h>
+#include <ungula/motor/drivers/tmc2209.h>
+#include <ungula/hal/uart/uart.h>
 
-ungula::uart::Uart uart(2);
-tmc::Tmc2209       driver(uart, 0.11F, /*step=*/26, /*en=*/27, /*dir=*/14, /*addr=*/0);
-motor::LocalMotor  mot;
+ungula::hal::uart::Uart uart(2);
+ungula::motor::tmc::Tmc2209       driver(uart, 0.11F, /*step=*/26, /*en=*/27, /*dir=*/14, /*addr=*/0);
+ungula::motor::LocalMotor  mot;
 
 void setup() {
     uart.begin(115200, /*tx=*/17, /*rx=*/16);
@@ -62,13 +62,13 @@ visible speed. From here, layer on profiles, limits, stall, homing.
 ### Use case: Realistic axis with limits and stall-stop
 
 ```cpp
-#include <motor/local_motor.h>
-#include <motor/drivers/tmc2209.h>
-#include <hal/uart/uart.h>
+#include <ungula/motor/local_motor.h>
+#include <ungula/motor/drivers/tmc2209.h>
+#include <ungula/hal/uart/uart.h>
 
-ungula::uart::Uart uart(2);
-tmc::Tmc2209       driver(uart, 0.11F, 26, 27, 14, 0);
-motor::LocalMotor  mot;
+ungula::hal::uart::Uart uart(2);
+ungula::motor::tmc::Tmc2209       driver(uart, 0.11F, 26, 27, 14, 0);
+ungula::motor::LocalMotor  mot;
 
 void setup() {
     uart.begin(115200, 17, 16);
@@ -90,9 +90,9 @@ void setup() {
     mot.addLimitForward(/*pin=*/33);
     mot.setAutoStopOnStall(true);
 
-    mot.setProfileSpeed(motor::MotionProfile::JOG, 10000);
-    mot.setProfileAccel(motor::MotionProfile::JOG, 500);
-    mot.setActiveProfile(motor::MotionProfile::JOG);
+    mot.setProfileSpeed(ungula::motor::MotionProfile::JOG, 10000);
+    mot.setProfileAccel(ungula::motor::MotionProfile::JOG, 500);
+    mot.setActiveProfile(ungula::motor::MotionProfile::JOG);
 
     mot.begin();
     mot.enable();
@@ -106,16 +106,16 @@ void onStop() { mot.stop(); }
 ```cpp
 if (mot.isIdle()) {
     switch (mot.lastStopReason()) {
-        case motor::StopReason::TargetReached:  /* completed cleanly */ break;
-        case motor::StopReason::UserStop:       /* operator pressed stop */ break;
-        case motor::StopReason::LimitHit:       /* recover */ break;
-        case motor::StopReason::Stall:          mot.clearStall(); break;
-        case motor::StopReason::Fault:          mot.clearFault(); break;
+        case ungula::motor::StopReason::TargetReached:  /* completed cleanly */ break;
+        case ungula::motor::StopReason::UserStop:       /* operator pressed stop */ break;
+        case ungula::motor::StopReason::LimitHit:       /* recover */ break;
+        case ungula::motor::StopReason::Stall:          mot.clearStall(); break;
+        case ungula::motor::StopReason::Fault:          mot.clearFault(); break;
         default: break;
     }
 }
 
-if (mot.isLimitActive(motor::Direction::BACKWARD, /*index=*/0)) {
+if (mot.isLimitActive(ungula::motor::Direction::BACKWARD, /*index=*/0)) {
     // Sitting on the home switch right now.
 }
 
@@ -129,9 +129,9 @@ auto-clear within one service tick.
 ### Use case: Positional moves
 
 ```cpp
-mot.moveTo(1500.0F, motor::DistanceUnit::STEPS);
-mot.moveTo(25.0F,   motor::DistanceUnit::MM);
-mot.moveBy(-10.0F,  motor::DistanceUnit::MM);
+mot.moveTo(1500.0F, ungula::motor::DistanceUnit::STEPS);
+mot.moveTo(25.0F,   ungula::motor::DistanceUnit::MM);
+mot.moveBy(-10.0F,  ungula::motor::DistanceUnit::MM);
 ```
 
 `MM` and `CM` need `setStepsPerMm` first. `DEGREES` needs
@@ -140,15 +140,15 @@ mot.moveBy(-10.0F,  motor::DistanceUnit::MM);
 ### Use case: Limit-switch homing
 
 ```cpp
-#include <motor/homing/limit_switch_homing_strategy.h>
+#include <ungula/motor/homing/limit_switch_homing_strategy.h>
 
-motor::LimitSwitchHomingStrategy::Config cfg;
-cfg.homingDirection = motor::Direction::BACKWARD;
+ungula::motor::LimitSwitchHomingStrategy::Config cfg;
+cfg.homingDirection = ungula::motor::Direction::BACKWARD;
 cfg.fastSpeedSps    = 3000;
 cfg.slowSpeedSps    = 500;
 cfg.backoffSteps    = 300;
 
-motor::LimitSwitchHomingStrategy strategy(cfg);
+ungula::motor::LimitSwitchHomingStrategy strategy(cfg);
 
 void setup() {
     // ... driver, pins, profiles ...
@@ -165,16 +165,16 @@ void onHomeButton() { mot.home(); }       // non-blocking
 ### Use case: Stall homing (no limit switch, hard stop)
 
 ```cpp
-#include <motor/homing/stall_homing_strategy.h>
+#include <ungula/motor/homing/stall_homing_strategy.h>
 
-motor::StallHomingStrategy::Config cfg;
-cfg.homingDirection = motor::Direction::BACKWARD;
+ungula::motor::StallHomingStrategy::Config cfg;
+cfg.homingDirection = ungula::motor::Direction::BACKWARD;
 cfg.fastSpeedSps    = 2000;
 cfg.slowSpeedSps    = 500;
 cfg.backoffSteps    = 200;
 cfg.finalApproach   = true;               // false = single-touch
 
-motor::StallHomingStrategy strategy(cfg);
+ungula::motor::StallHomingStrategy strategy(cfg);
 mot.setHomingStrategy(&strategy);
 // strategy forces setAutoStopOnStall(true) inside begin().
 // isHomed() always starts false after reboot — you must home() once.
@@ -186,7 +186,7 @@ mot.setHomingStrategy(&strategy);
 mot_x.home();
 mot_y.home();
 while (mot_x.isHoming() || mot_y.isHoming()) {
-    ungula::TimeControl::delayMs(5);
+    ungula::core::time::TimeControl::delayMs(5);
 }
 if (!mot_x.isHomed() || !mot_y.isHomed()) { /* report */ }
 ```
@@ -194,7 +194,7 @@ if (!mot_x.isHomed() || !mot_y.isHomed()) { /* report */ }
 ### Use case: Speed-proportional run current
 
 ```cpp
-motor::CurrentCurve curve;
+ungula::motor::CurrentCurve curve;
 curve.minSps = 200;  curve.maxSps = 3000;
 curve.minMa  = 1300; curve.maxMa  = 900;
 mot.setCurrentCurve(curve);
@@ -208,10 +208,10 @@ endpoint.
 ### Use case: Subscribe to motor events
 
 ```cpp
-class Listener : public motor::IMotorEventListener {
+class Listener : public ungula::motor::IMotorEventListener {
     public:
-        void onMotorEvent(const motor::MotorEvent& ev) override {
-            if (ev.type == motor::MotorEventType::LimitSwitchHit) { /* … */ }
+        void onMotorEvent(const ungula::motor::MotorEvent& ev) override {
+            if (ev.type == ungula::motor::MotorEventType::LimitSwitchHit) { /* … */ }
         }
 };
 
@@ -225,21 +225,21 @@ non-blocking.
 ### Use case: Remote motor proxy across an ESP-NOW link
 
 ```cpp
-#include <motor/remote_motor.h>
+#include <ungula/motor/remote_motor.h>
 
-class MyRouter : public motor::IMotorCommandSink {
+class MyRouter : public ungula::motor::IMotorCommandSink {
     public:
-        bool send(uint8_t motorId, motor::MotorCommandType cmd) override          { /* serialise + transport.send */ return true; }
-        bool sendMove(uint8_t motorId, motor::MotorCommandType cmd,
-                      const motor::MotorMoveParams& p) override                   { return true; }
+        bool send(uint8_t motorId, ungula::motor::MotorCommandType cmd) override          { /* serialise + transport.send */ return true; }
+        bool sendMove(uint8_t motorId, ungula::motor::MotorCommandType cmd,
+                      const ungula::motor::MotorMoveParams& p) override                   { return true; }
         bool sendProfile(uint8_t motorId,
-                         const motor::MotionProfileSpec& profile) override        { return true; }
+                         const ungula::motor::MotionProfileSpec& profile) override        { return true; }
 };
 
 MyRouter           router;
-motor::RemoteMotor mot(router, /*motorId=*/3);
+ungula::motor::RemoteMotor mot(router, /*motorId=*/3);
 
-void onPeerStateMessage(motor::MotorFsmState s, int32_t pos) {
+void onPeerStateMessage(ungula::motor::MotorFsmState s, int32_t pos) {
     mot.updateState(s, pos);     // refresh cache from remote events
 }
 ```
@@ -251,9 +251,9 @@ the motor is remote.
 ### Use case: Multi-motor coordinator
 
 ```cpp
-#include <motor/motor_coordinator.h>
+#include <ungula/motor/motor_coordinator.h>
 
-motor::MotorCoordinator coord;
+ungula::motor::MotorCoordinator coord;
 coord.addMotor(&mot_x);   // up to MAX_COORDINATOR_MOTORS = 8
 coord.addMotor(&mot_y);
 mot_x.subscribe(&coord);  // coordinator listens to events
@@ -270,28 +270,28 @@ coord.emergencyStopAll();
 
 | Type | Header | Purpose |
 | ---- | ------ | ------- |
-| `motor::IMotor` | `motor/i_motor.h` | Top-level motor interface |
-| `motor::IHomeableMotor` | `motor/homing/i_homeable_motor.h` | `IMotor` + homing-strategy hooks |
-| `motor::IMotorDriver` | `motor/i_motor_driver.h` | Driver chip abstraction |
-| `motor::IMotorCommandSink` | `motor/i_motor_command_sink.h` | Wire transport for `RemoteMotor` |
-| `motor::IMotorEventListener` | `motor/i_motor_event_listener.h` | Event sink |
-| `motor::IHomingStrategy` | `motor/homing/i_homing_strategy.h` | Homing policy |
-| `motor::LocalMotor` | `motor/local_motor.h` | The autonomous motor |
-| `motor::RemoteMotor` | `motor/remote_motor.h` | Cross-board proxy |
-| `motor::MotorCoordinator` | `motor/motor_coordinator.h` | Multi-motor orchestrator |
-| `motor::MotorEventPublisher<N>` | `motor/motor_event_publisher.h` | Listener fan-out (used internally; safe to reuse) |
-| `motor::MotorEvent`, `MotorEventType` | `motor/motor_event.h` | Event payload |
-| `motor::MotorFsmState`, `StopReason` | `motor/motor_state.h` | FSM enums + helpers |
-| `motor::Direction`, `MotionProfile`, `DistanceUnit`, `SpeedUnit`, `SpeedValue`, `ProfileConfig`, `CurrentCurve` | `motor/motor_types.h` | Value types |
-| `motor::MotionProfileSpec`, `ProfileShape` | `motor/motion_profile.h` | Autonomous profile |
-| `motor::MotorCommandType`, `MotorMoveParams` | `motor/i_motor_command_sink.h` | Wire commands |
-| `motor::LimitSwitchHomingStrategy::Config` / `motor::StallHomingStrategy::Config` | `motor/homing/*.h` | Strategy tuning |
-| `motor::HomingRunner` | `motor/homing/homing_runner.h` | Standalone runner (advanced) |
-| `tmc::Tmc2209`, `tmc::StallConfig` | `motor/drivers/tmc2209.h` | TMC2209 driver |
+| `ungula::motor::IMotor` | `ungula/motor/i_motor.h` | Top-level motor interface |
+| `ungula::motor::IHomeableMotor` | `ungula/motor/homing/i_homeable_motor.h` | `IMotor` + homing-strategy hooks |
+| `ungula::motor::IMotorDriver` | `ungula/motor/i_motor_driver.h` | Driver chip abstraction |
+| `ungula::motor::IMotorCommandSink` | `ungula/motor/i_motor_command_sink.h` | Wire transport for `RemoteMotor` |
+| `ungula::motor::IMotorEventListener` | `ungula/motor/i_motor_event_listener.h` | Event sink |
+| `ungula::motor::IHomingStrategy` | `ungula/motor/homing/i_homing_strategy.h` | Homing policy |
+| `ungula::motor::LocalMotor` | `ungula/motor/local_motor.h` | The autonomous motor |
+| `ungula::motor::RemoteMotor` | `ungula/motor/remote_motor.h` | Cross-board proxy |
+| `ungula::motor::MotorCoordinator` | `ungula/motor/motor_coordinator.h` | Multi-motor orchestrator |
+| `ungula::motor::MotorEventPublisher<N>` | `ungula/motor/motor_event_publisher.h` | Listener fan-out (used internally; safe to reuse) |
+| `ungula::motor::MotorEvent`, `MotorEventType` | `ungula/motor/motor_event.h` | Event payload |
+| `ungula::motor::MotorFsmState`, `StopReason` | `ungula/motor/motor_state.h` | FSM enums + helpers |
+| `ungula::motor::Direction`, `MotionProfile`, `DistanceUnit`, `SpeedUnit`, `SpeedValue`, `ProfileConfig`, `CurrentCurve` | `ungula/motor/motor_types.h` | Value types |
+| `ungula::motor::MotionProfileSpec`, `ProfileShape` | `ungula/motor/motion_profile.h` | Autonomous profile |
+| `ungula::motor::MotorCommandType`, `MotorMoveParams` | `ungula/motor/i_motor_command_sink.h` | Wire commands |
+| `ungula::motor::LimitSwitchHomingStrategy::Config` / `ungula::motor::StallHomingStrategy::Config` | `ungula/motor/homing/*.h` | Strategy tuning |
+| `ungula::motor::HomingRunner` | `ungula/motor/homing/homing_runner.h` | Standalone runner (advanced) |
+| `ungula::motor::tmc::Tmc2209`, `ungula::motor::tmc::StallConfig` | `ungula/motor/drivers/tmc2209.h` | TMC2209 driver |
 
 Internals exposed only because they back `LocalMotor` (don't instantiate
-from app code): `motor::MotorFsm`, `motor::StepGenerator`,
-`motor::LimitSwitch`, `motor::StallDetector`.
+from app code): `ungula::motor::MotorFsm`, `ungula::motor::StepGenerator`,
+`ungula::motor::LimitSwitch`, `ungula::motor::StallDetector`.
 
 Constants: `MAX_MOTOR_EVENT_LISTENERS = 4`,
 `MAX_COORDINATOR_MOTORS = 8`, `PROFILE_COUNT = 3`,
@@ -303,7 +303,7 @@ Constants: `MAX_MOTOR_EVENT_LISTENERS = 4`,
 
 ## Public functions / methods
 
-### `motor::IMotor` (and therefore `LocalMotor` and `RemoteMotor`)
+### `ungula::motor::IMotor` (and therefore `LocalMotor` and `RemoteMotor`)
 
 | Member | Notes |
 | ------ | ----- |
@@ -325,7 +325,7 @@ Constants: `MAX_MOTOR_EVENT_LISTENERS = 4`,
 | `int32_t limitCount(Direction)` |  |
 | `bool isHoming() / isHomed()` | `isHomed` seeded at `begin()` from strategy's `isAtHomeReference`. |
 
-### `motor::LocalMotor` (additions)
+### `ungula::motor::LocalMotor` (additions)
 
 Wiring (call before `begin`):
 
@@ -372,7 +372,7 @@ Diagnostics:
 `handleServiceTimer()` is exposed only because the `esp_timer` callback
 must reach it — never call from app code.
 
-### `motor::IMotorDriver`
+### `ungula::motor::IMotorDriver`
 
 `begin`, `enable`, `disable`, `setDirection(Direction)`,
 `uint8_t stepPin()`, `setDirectionInverted(bool)`,
@@ -386,10 +386,10 @@ must reach it — never call from app code.
 Drivers without stall detection return `false` from `isStalling()` and
 implement `clearStall` as empty.
 
-### `tmc::Tmc2209`
+### `ungula::motor::tmc::Tmc2209`
 
 ```cpp
-Tmc2209(ungula::uart::Uart&, float rSenseOhms,
+Tmc2209(ungula::hal::uart::Uart&, float rSenseOhms,
         uint8_t stepPin, uint8_t enablePin, uint8_t dirPin,
         uint8_t address = 0);
 ```
@@ -425,7 +425,7 @@ Implements the full `IMotorDriver`. Extras:
 (stall detection off until set), `diagConfirmCount = 8`, `sgSlope = 0.17`,
 `sgMaxBaseline = 300`, `sgDropFraction = 0.65`, `sgConfirmCount = 10`.
 
-### `motor::IHomingStrategy`
+### `ungula::motor::IHomingStrategy`
 
 `begin(IHomeableMotor&)`, `bool tick(IHomeableMotor&)` (returns `true`
 when finished), `finish(IHomeableMotor&, bool succeeded)`,
@@ -434,7 +434,7 @@ when finished), `finish(IHomeableMotor&, bool succeeded)`,
 Limit-switch and stall implementations described above. Common rule:
 strategies talk only via `IHomeableMotor`, never directly to GPIO.
 
-### `motor::HomingRunner` (advanced)
+### `ungula::motor::HomingRunner` (advanced)
 
 ```cpp
 HomingRunner(IHomeableMotor&, IHomingStrategy&, uint32_t timeoutMs = 0);
@@ -447,7 +447,7 @@ Use this only when you want to drive a strategy against an
 `LocalMotor::home()` already runs the runner internally, in-phase with
 the service timer — for production code use that.
 
-### `motor::RemoteMotor`
+### `ungula::motor::RemoteMotor`
 
 ```cpp
 RemoteMotor(IMotorCommandSink&, uint8_t motorId);
@@ -459,7 +459,7 @@ Implements `IMotor`. Black-box flags (`isStalling`, `lastStopReason`,
 report conservative defaults — the wire protocol does not currently
 ship those fields.
 
-### `motor::MotorCoordinator`
+### `ungula::motor::MotorCoordinator`
 
 Inline in the header. `bool addMotor(IMotor*)`,
 `IMotor* motor(uint8_t)`, `uint8_t motorCount()`, `void enableAll()`,
@@ -467,7 +467,7 @@ Inline in the header. `bool addMotor(IMotor*)`,
 last event in `lastEvent_` (no public getter — use a custom listener if
 you need the stream).
 
-### `motor::MotorEventPublisher<N>` (template)
+### `ungula::motor::MotorEventPublisher<N>` (template)
 
 Generic listener fan-out. `bool subscribe(IMotorEventListener*)` (false
 when full or null), `bool unsubscribe(...)`, `void publish(const MotorEvent&)`,
@@ -569,19 +569,19 @@ wire protocol if you need full fidelity.
 
 ## Internals not part of the public API
 
-- `motor::MotorFsm` — owned by `LocalMotor`. App code reads
+- `ungula::motor::MotorFsm` — owned by `LocalMotor`. App code reads
   `state()` / black-box getters; do not request transitions directly.
-- `motor::StepGenerator` — owned by `LocalMotor`. Step pulse + ramp
+- `ungula::motor::StepGenerator` — owned by `LocalMotor`. Step pulse + ramp
   authority; do not instantiate. The `handleStepIsr` /
   `handleRampTimer` methods are public only so the C ISR/timer
   trampolines can call them.
-- `motor::LimitSwitch` — owned per slot inside `LocalMotor`. Use
+- `ungula::motor::LimitSwitch` — owned per slot inside `LocalMotor`. Use
   `addLimit*` and `isLimitActive`.
-- `motor::StallDetector` — owned by the driver (`tmc::Tmc2209`).
+- `ungula::motor::StallDetector` — owned by the driver (`ungula::motor::tmc::Tmc2209`).
   Configure stall through `configureStall(StallConfig)`, not by reaching
   through the detector.
-- `tmc::reg::*`, `tmc::gconf::*`, `tmc::chop::*`, `tmc::pwm::*`,
-  `tmc::ihr::*`, `tmc::ioin::*`, `tmc::drv::*`, `tmc::defaults::*`,
+- `ungula::motor::tmc::reg::*`, `ungula::motor::tmc::gconf::*`, `ungula::motor::tmc::chop::*`, `ungula::motor::tmc::pwm::*`,
+  `ungula::motor::tmc::ihr::*`, `ungula::motor::tmc::ioin::*`, `ungula::motor::tmc::drv::*`, `ungula::motor::tmc::defaults::*`,
   protocol constants (`SYNC_BYTE`, `WRITE_FLAG`, etc.) — TMC2209 chip
   register tables. Useful when extending the driver itself; never
   needed by app code.
@@ -590,7 +590,7 @@ wire protocol if you need full fidelity.
 - `MotionProfileSpec` fields marked TODO (`startVelocitySps`,
   `endVelocitySps`, `accelerationSpsPs`, `decelerationSpsPs`,
   `shape`) — currently ignored by `LocalMotor`. Don't rely on them.
-- `motor/motor_event_publisher.h` — fine to reuse, but the `LocalMotor`
+- `ungula/motor/motor_event_publisher.h` — fine to reuse, but the `LocalMotor`
   instance already maintains its own publisher. Don't double-subscribe.
 
 ---
@@ -607,7 +607,7 @@ wire protocol if you need full fidelity.
 - Set `setStepsPerMm` / `setStepsPerDegree` before issuing
   `moveTo` / `moveBy` with non-`STEPS` units.
 - Stall detection lives **inside the driver**. Tune via
-  `tmc::Tmc2209::configureStall(StallConfig)`; flip
+  `ungula::motor::tmc::Tmc2209::configureStall(StallConfig)`; flip
   `mot.setAutoStopOnStall(true)` if you want the FSM to enter `Stall`
   on detection.
 - Homing strategy must outlive the motor. `setHomingStrategy(nullptr)`

@@ -8,19 +8,19 @@
 
 #include <gtest/gtest.h>
 
-#include <motor/remote_motor.h>
+#include <ungula/motor/remote_motor.h>
 
 #include "test_remote_motor_sink.h"
 
 namespace {
 
-    using motor::Direction;
-    using motor::DistanceUnit;
-    using motor::MotionProfileSpec;
-    using motor::MotorCommandType;
-    using motor::MotorFsmState;
-    using motor::RemoteMotor;
-    using motor::StopReason;
+    using ungula::motor::Direction;
+    using ungula::motor::DistanceUnit;
+    using ungula::motor::MotionProfileSpec;
+    using ungula::motor::MotorCommandType;
+    using ungula::motor::MotorFsmState;
+    using ungula::motor::RemoteMotor;
+    using ungula::motor::StopReason;
     using test_helpers::RecordingSink;
 
     // ---- Initial state ----

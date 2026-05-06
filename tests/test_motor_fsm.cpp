@@ -14,25 +14,25 @@
 
 #include <gtest/gtest.h>
 
-#include <motor/motor_event.h>
-#include <motor/motor_event_publisher.h>
-#include <motor/motor_fsm.h>
-#include <motor/motor_state.h>
+#include <ungula/motor/motor_event.h>
+#include <ungula/motor/motor_event_publisher.h>
+#include <ungula/motor/motor_fsm.h>
+#include <ungula/motor/motor_state.h>
 
 #include <vector>
 
 namespace {
 
-    using motor::Direction;
-    using motor::MotorEvent;
-    using motor::MotorEventPublisher;
-    using motor::MotorEventType;
-    using motor::MotorFsm;
-    using motor::MotorFsmState;
+    using ungula::motor::Direction;
+    using ungula::motor::MotorEvent;
+    using ungula::motor::MotorEventPublisher;
+    using ungula::motor::MotorEventType;
+    using ungula::motor::MotorFsm;
+    using ungula::motor::MotorFsmState;
 
     // Capturing listener so we can assert on the events the FSM publishes
     // for every transition.
-    class CapturingListener : public motor::IMotorEventListener {
+    class CapturingListener : public ungula::motor::IMotorEventListener {
         public:
             std::vector<MotorEvent> events;
 
@@ -45,7 +45,7 @@ namespace {
     // initialized to `Disabled` (the default state).
     struct Harness {
             MotorFsm fsm;
-            MotorEventPublisher<motor::MAX_MOTOR_EVENT_LISTENERS> publisher;
+            MotorEventPublisher<ungula::motor::MAX_MOTOR_EVENT_LISTENERS> publisher;
             CapturingListener listener;
             int32_t position = 0;
 
