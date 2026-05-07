@@ -149,6 +149,8 @@ The host should never need to reason about which FSM state the motor is currentl
 ### Status query cookbook
 
 ```cpp
+#include <ungula/motor.h>
+
 // "Is the motor idle because it just completed a move, or because the
 //  user pressed stop, or because it stalled?"
 if (mot.isIdle()) {
@@ -186,6 +188,8 @@ Stall and Fault still require an explicit `clearStall()` / `clearFault()` from t
 The driver interface handles everything between the ESP32 and the motor driver chip. Pins, registers, communication protocol — all behind this wall.
 
 ```cpp
+#include <ungula/motor.h>
+
 class IMotorDriver {
 public:
     virtual void begin() = 0;                        // init GPIO, UART, registers
@@ -267,6 +271,8 @@ The motor goes through 11 states automatically. `Decelerating` collapses straigh
 Subscribe to motor events to react without polling:
 
 ```cpp
+#include <ungula/motor.h>
+
 class MyListener : public ungula::motor::IMotorEventListener {
 public:
     void onMotorEvent(const ungula::motor::MotorEvent& event) override {
@@ -287,6 +293,8 @@ Events are delivered synchronously from the 10 ms service timer — keep handler
 Three named profiles let you store different speed/ramp combinations:
 
 ```cpp
+#include <ungula/motor.h>
+
 // Fast jog for manual positioning
 mot.setProfileSpeed(ungula::motor::MotionProfile::JOG, 15000);
 mot.setProfileAccel(ungula::motor::MotionProfile::JOG, 300);
@@ -308,6 +316,8 @@ mot.moveForward();  // uses JOG speed and ramp
 ## Positional moves
 
 ```cpp
+#include <ungula/motor.h>
+
 // Move to absolute position (in steps, mm, cm, or degrees)
 mot.moveTo(1500.0F, ungula::motor::DistanceUnit::STEPS);
 mot.moveTo(25.0F, ungula::motor::DistanceUnit::MM);
@@ -323,6 +333,8 @@ The step generator handles position tracking at ISR level with zero overshoot.
 TMC2209-class drivers can change run current at runtime over UART. When the mechanical load varies with speed — a vertical axis holding weight at a slow process move, a rotary axis that only needs torque when accelerating — you can install a linear current-vs-speed curve on `LocalMotor` so the driver current tracks the commanded SPS. Disabled by default, so existing projects are unaffected.
 
 ```cpp
+#include <ungula/motor.h>
+
 // High torque at low speed (vertical axis holding a hot die assembly).
 ungula::motor::CurrentCurve curve;
 curve.minSps = 200;
@@ -414,6 +426,8 @@ Stall-based homing has no steady-state signal, so `isHomed()` always starts fals
 Each motor owns its own homing run, so coordinating two axes is just two calls and two flags:
 
 ```cpp
+#include <ungula/motor.h>
+
 mot_x.home();
 mot_y.home();
 while (mot_x.isHoming() || mot_y.isHoming()) {

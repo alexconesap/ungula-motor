@@ -3,6 +3,7 @@
 // See LICENSE file for details.
 
 #pragma once
+
 #ifndef __cplusplus
 #error UngulaMotor requires a C++ compiler
 #endif
