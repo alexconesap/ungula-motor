@@ -26,75 +26,85 @@
 ///   Coordinator → RemoteMotor → IMotorCommandSink → [app] → transport
 ///   transport → [app] → RemoteMotor.updateState()
 
-namespace ungula::motor {
+namespace ungula::motor
+{
 
     class RemoteMotor : public IMotor {
-        public:
-            /// @param commandSink  Application-provided command delivery.
-            /// @param motorId  Identifier of the motor on the remote node.
-            RemoteMotor(IMotorCommandSink& commandSink, uint8_t motorId);
+    public:
+        /// @param commandSink  Application-provided command delivery.
+        /// @param motorId  Identifier of the motor on the remote node.
+        RemoteMotor(IMotorCommandSink &commandSink, uint8_t motorId);
 
-            // ---- IMotor interface ----
+        // ---- IMotor interface ----
 
-            void enable() override;
-            void disable() override;
-            void moveForward() override;
-            void moveBackward() override;
-            void moveTo(float target, DistanceUnit unit = DistanceUnit::STEPS) override;
-            void moveBy(float delta, DistanceUnit unit = DistanceUnit::STEPS) override;
-            void executeProfile(const MotionProfileSpec& profile) override;
-            void stop() override;
-            void emergencyStop() override;
-            MotorFsmState state() const override;
-            int32_t positionSteps() const override;
-            bool isMoving() const override;
+        void enable() override;
+        void disable() override;
+        void moveForward() override;
+        void moveBackward() override;
+        void moveTo(float target, DistanceUnit unit = DistanceUnit::STEPS) override;
+        void moveBy(float delta, DistanceUnit unit = DistanceUnit::STEPS) override;
+        void executeProfile(const MotionProfileSpec &profile) override;
+        void stop() override;
+        void emergencyStop() override;
+        MotorFsmState state() const override;
+        int32_t positionSteps() const override;
+        bool isMoving() const override;
 
-            // RemoteMotor is a proxy — the black-box status flags would
-            // need to ride in the cached state messages from the far end.
-            // For now, report conservative defaults. Wire these up when the
-            // protocol grows the needed fields.
-            bool isIdle() const override {
-                return state() == MotorFsmState::Idle;
-            }
-            bool isStalling() const override {
-                return state() == MotorFsmState::Stall;
-            }
-            StopReason lastStopReason() const override {
-                return StopReason::None;
-            }
-            bool wasLimitHit() const override {
-                return false;
-            }
-            bool isLimitActive(Direction /*dir*/) const override {
-                return false;
-            }
-            bool isLimitActive(Direction /*dir*/, int32_t /*index*/) const override {
-                return false;
-            }
-            int32_t limitCount(Direction /*dir*/) const override {
-                return 0;
-            }
-            bool isHoming() const override {
-                return false;
-            }
-            bool isHomed() const override {
-                return false;
-            }
+        // RemoteMotor is a proxy — the black-box status flags would
+        // need to ride in the cached state messages from the far end.
+        // For now, report conservative defaults. Wire these up when the
+        // protocol grows the needed fields.
+        bool isIdle() const override
+        {
+            return state() == MotorFsmState::Idle;
+        }
+        bool isStalling() const override
+        {
+            return state() == MotorFsmState::Stall;
+        }
+        StopReason lastStopReason() const override
+        {
+            return StopReason::None;
+        }
+        bool wasLimitHit() const override
+        {
+            return false;
+        }
+        bool isLimitActive(Direction /*dir*/) const override
+        {
+            return false;
+        }
+        bool isLimitActive(Direction /*dir*/, int32_t /*index*/) const override
+        {
+            return false;
+        }
+        int32_t limitCount(Direction /*dir*/) const override
+        {
+            return 0;
+        }
+        bool isHoming() const override
+        {
+            return false;
+        }
+        bool isHomed() const override
+        {
+            return false;
+        }
 
-            // ---- State updates (called by application message router) ----
+        // ---- State updates (called by application message router) ----
 
-            /// @brief Update cached state from a remote event.
-            /// Called by the application when it receives a motor state message
-            /// from the remote node through the shared transport.
-            void updateState(MotorFsmState newState, int32_t position);
+        /// @brief Update cached state from a remote event.
+        /// Called by the application when it receives a motor state message
+        /// from the remote node through the shared transport.
+        void updateState(MotorFsmState newState, int32_t position);
 
-        private:
-            IMotorCommandSink& commandSink_;
-            uint8_t motorId_;
+    private:
+        IMotorCommandSink &commandSink_;
+        uint8_t motorId_;
 
-            // Cached state from last received event
-            MotorFsmState cachedState_ = MotorFsmState::Disabled;
-            int32_t cachedPosition_ = 0;
+        // Cached state from last received event
+        MotorFsmState cachedState_ = MotorFsmState::Disabled;
+        int32_t cachedPosition_ = 0;
     };
 
-}  // namespace ungula::motor
+} // namespace ungula::motor

@@ -12,7 +12,8 @@
 #include <freertos/portmacro.h>
 #include <ungula/hal/gpio/gpio_access.h>
 
-namespace ungula::motor {
+namespace ungula::motor
+{
 
     // Spinlock protecting shared state between the step ISR, ramp timer,
     // and caller context. On dual-core ESP32, this prevents torn reads
@@ -21,13 +22,15 @@ namespace ungula::motor {
 
     // ---- Step pulse ISR (IRAM — minimal, no flash access) ----
 
-    static bool IRAM_ATTR onTimerAlarm(gptimer_handle_t timer,
-                                       const gptimer_alarm_event_data_t* eventData, void* userCtx) {
-        static_cast<StepGenerator*>(userCtx)->handleStepIsr();
+    static bool IRAM_ATTR onTimerAlarm(gptimer_handle_t timer, const gptimer_alarm_event_data_t *eventData,
+                                       void *userCtx)
+    {
+        static_cast<StepGenerator *>(userCtx)->handleStepIsr();
         return false;
     }
 
-    void IRAM_ATTR StepGenerator::handleStepIsr() {
+    void IRAM_ATTR StepGenerator::handleStepIsr()
+    {
         portENTER_CRITICAL_ISR(&g_stepMux);
 
         // @TODO check if we can skip this code. It is really defensive and it happens ALWAYS while
@@ -54,8 +57,8 @@ namespace ungula::motor {
             }
 
             if (hasTarget_) {
-                const bool reached = directionFwd_ ? (positionSteps_ >= targetPosition_)
-                                                   : (positionSteps_ <= targetPosition_);
+                const bool reached = directionFwd_ ? (positionSteps_ >= targetPosition_) :
+                                                     (positionSteps_ <= targetPosition_);
                 if (reached) {
                     running_ = false;
                     hasTarget_ = false;
@@ -85,7 +88,8 @@ namespace ungula::motor {
     // main loop is mid-ADC burst) still produces correct cumulative
     // speed.
 
-    void StepGenerator::serviceRamp(uint32_t nowMs) {
+    void StepGenerator::serviceRamp(uint32_t nowMs)
+    {
         // Single lock: drain ISR stop request + snapshot running_ atomically.
         portENTER_CRITICAL(&g_stepMux);
         if (stopRequestedFromIsr_) {
@@ -106,7 +110,7 @@ namespace ungula::motor {
         uint32_t dtMs = nowMs - lastRampMs_;
         lastRampMs_ = nowMs;
         if (dtMs == 0) {
-            return;  // called twice in the same ms — nothing to integrate
+            return; // called twice in the same ms — nothing to integrate
         }
 
         // Snapshot ramp parameters under lock, compute outside, write back under lock.
@@ -141,7 +145,8 @@ namespace ungula::motor {
 
     // ---- Lifecycle ----
 
-    bool StepGenerator::begin(uint8_t stepPin) {
+    bool StepGenerator::begin(uint8_t stepPin)
+    {
         if (stepTimerHandle_ != nullptr) {
             end();
         }
@@ -206,7 +211,8 @@ namespace ungula::motor {
         return true;
     }
 
-    void StepGenerator::end() {
+    void StepGenerator::end()
+    {
         // Stop step timer
         if (stepTimerHandle_ != nullptr) {
             gptimer_handle_t handle = static_cast<gptimer_handle_t>(stepTimerHandle_);
@@ -219,17 +225,16 @@ namespace ungula::motor {
 
     // ---- Speed and ramp ----
 
-    void StepGenerator::setSpeed(int32_t targetSps, uint32_t accelMs, uint32_t decelMs) {
+    void StepGenerator::setSpeed(int32_t targetSps, uint32_t accelMs, uint32_t decelMs)
+    {
         // Compute rates before entering critical section to minimize lock time
         float newAccelRate = accelRate_;
         float newDecelRate = decelRate_;
 
         if (targetSps > 0) {
             float speedFloat = static_cast<float>(targetSps);
-            newAccelRate =
-                    (accelMs > 0) ? speedFloat / (static_cast<float>(accelMs) / 1000.0F) : 0.0F;
-            newDecelRate =
-                    (decelMs > 0) ? speedFloat / (static_cast<float>(decelMs) / 1000.0F) : 0.0F;
+            newAccelRate = (accelMs > 0) ? speedFloat / (static_cast<float>(accelMs) / 1000.0F) : 0.0F;
+            newDecelRate = (decelMs > 0) ? speedFloat / (static_cast<float>(decelMs) / 1000.0F) : 0.0F;
         }
 
         // Atomic group write — ramp timer and ISR see consistent speed + rates
@@ -242,7 +247,8 @@ namespace ungula::motor {
         portEXIT_CRITICAL(&g_stepMux);
     }
 
-    void StepGenerator::start() {
+    void StepGenerator::start()
+    {
         portENTER_CRITICAL(&g_stepMux);
         autoStopped_ = false;
         currentSps_ = 0.0F;
@@ -250,14 +256,16 @@ namespace ungula::motor {
         portEXIT_CRITICAL(&g_stepMux);
     }
 
-    void StepGenerator::stop() {
+    void StepGenerator::stop()
+    {
         portENTER_CRITICAL(&g_stepMux);
         targetSps_ = 0;
         portEXIT_CRITICAL(&g_stepMux);
         // Ramp timer brings currentSps_ to zero, then auto-stops
     }
 
-    void StepGenerator::hardStop() {
+    void StepGenerator::hardStop()
+    {
         portENTER_CRITICAL(&g_stepMux);
         running_ = false;
         currentSps_ = 0.0F;
@@ -266,7 +274,8 @@ namespace ungula::motor {
         applyAlarmTicks(step::IDLE_ALARM_TICKS);
     }
 
-    bool StepGenerator::consumeAutoStop() {
+    bool StepGenerator::consumeAutoStop()
+    {
         portENTER_CRITICAL(&g_stepMux);
         bool was = autoStopped_;
         autoStopped_ = false;
@@ -274,13 +283,15 @@ namespace ungula::motor {
         return was;
     }
 
-    void StepGenerator::resetPosition() {
+    void StepGenerator::resetPosition()
+    {
         portENTER_CRITICAL(&g_stepMux);
         positionSteps_ = 0;
         portEXIT_CRITICAL(&g_stepMux);
     }
 
-    void StepGenerator::setTargetPosition(int32_t target) {
+    void StepGenerator::setTargetPosition(int32_t target)
+    {
         portENTER_CRITICAL(&g_stepMux);
         targetPosition_ = target;
         targetReached_ = false;
@@ -288,13 +299,15 @@ namespace ungula::motor {
         portEXIT_CRITICAL(&g_stepMux);
     }
 
-    void StepGenerator::clearTargetPosition() {
+    void StepGenerator::clearTargetPosition()
+    {
         portENTER_CRITICAL(&g_stepMux);
         hasTarget_ = false;
         portEXIT_CRITICAL(&g_stepMux);
     }
 
-    bool StepGenerator::consumeTargetReached() {
+    bool StepGenerator::consumeTargetReached()
+    {
         portENTER_CRITICAL(&g_stepMux);
         bool was = targetReached_;
         targetReached_ = false;
@@ -304,8 +317,9 @@ namespace ungula::motor {
 
     // ---- Ramp computation (called from esp_timer task, not ISR) ----
 
-    float StepGenerator::updateRamp(uint32_t deltaMs, int32_t snapTarget, float snapAccel,
-                                    float snapDecel, float snapCurrent) const {
+    float StepGenerator::updateRamp(uint32_t deltaMs, int32_t snapTarget, float snapAccel, float snapDecel,
+                                    float snapCurrent) const
+    {
         const float targetFloat = static_cast<float>(snapTarget);
         const float diff = targetFloat - snapCurrent;
 
@@ -328,16 +342,18 @@ namespace ungula::motor {
         return (newSps < 0.0F) ? 0.0F : newSps;
     }
 
-    uint32_t StepGenerator::computeAlarmTicks(float sps) {
+    uint32_t StepGenerator::computeAlarmTicks(float sps)
+    {
         if (sps < step::MIN_RUNNING_SPS) {
             return step::IDLE_ALARM_TICKS;
         }
-        uint32_t ticks = static_cast<uint32_t>(static_cast<float>(step::TIMER_FREQ_HZ) /
-                                               (sps * step::TOGGLES_PER_STEP));
+        uint32_t ticks =
+            static_cast<uint32_t>(static_cast<float>(step::TIMER_FREQ_HZ) / (sps * step::TOGGLES_PER_STEP));
         return (ticks < step::MIN_ALARM_TICKS) ? step::MIN_ALARM_TICKS : ticks;
     }
 
-    void StepGenerator::applyAlarmTicks(uint32_t ticks) {
+    void StepGenerator::applyAlarmTicks(uint32_t ticks)
+    {
         lastAppliedTicks_ = ticks;
         if (stepTimerHandle_ == nullptr) {
             return;
@@ -350,4 +366,4 @@ namespace ungula::motor {
         gptimer_set_alarm_action(handle, &alarmConfig);
     }
 
-}  // namespace ungula::motor
+} // namespace ungula::motor

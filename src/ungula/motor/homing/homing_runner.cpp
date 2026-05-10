@@ -9,12 +9,18 @@
 #include "i_homeable_motor.h"
 #include "i_homing_strategy.h"
 
-namespace ungula::motor::homing {
+namespace ungula::motor::homing
+{
 
-    HomingRunner::HomingRunner(IHomeableMotor& motor, IHomingStrategy& strategy, uint32_t timeoutMs)
-        : motor_(motor), strategy_(strategy), timeoutMs_(timeoutMs) {}
+    HomingRunner::HomingRunner(IHomeableMotor &motor, IHomingStrategy &strategy, uint32_t timeoutMs)
+            : motor_(motor)
+            , strategy_(strategy)
+            , timeoutMs_(timeoutMs)
+    {
+    }
 
-    void HomingRunner::start() {
+    void HomingRunner::start()
+    {
         if (state_ == State::Running) {
             return;
         }
@@ -23,7 +29,8 @@ namespace ungula::motor::homing {
         strategy_.begin(motor_);
     }
 
-    bool HomingRunner::step() {
+    bool HomingRunner::step()
+    {
         if (state_ != State::Running) {
             return true;
         }
@@ -46,7 +53,8 @@ namespace ungula::motor::homing {
         return false;
     }
 
-    void HomingRunner::abort() {
+    void HomingRunner::abort()
+    {
         if (state_ != State::Running) {
             return;
         }
@@ -54,11 +62,12 @@ namespace ungula::motor::homing {
         state_ = State::DoneFail;
     }
 
-    uint32_t HomingRunner::elapsedMs() const {
+    uint32_t HomingRunner::elapsedMs() const
+    {
         if (state_ == State::Idle) {
             return 0U;
         }
         return ungula::core::time::millis() - startMs_;
     }
 
-}  // namespace ungula::motor::homing
+} // namespace ungula::motor::homing

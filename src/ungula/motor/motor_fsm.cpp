@@ -5,32 +5,37 @@
 #include "motor_fsm.h"
 #include <ungula/core/time/time_control.h>
 
-namespace ungula::motor {
+namespace ungula::motor
+{
 
-    void MotorFsm::setPublisher(MotorEventPublisher<MAX_MOTOR_EVENT_LISTENERS>* publisher) {
+    void MotorFsm::setPublisher(MotorEventPublisher<MAX_MOTOR_EVENT_LISTENERS> *publisher)
+    {
         publisher_ = publisher;
     }
 
-    void MotorFsm::setPositionSource(const int32_t* position) {
+    void MotorFsm::setPositionSource(const int32_t *position)
+    {
         positionSource_ = position;
     }
 
     // ---- Transition helpers ----
 
-    bool MotorFsm::isMoving() const {
+    bool MotorFsm::isMoving() const
+    {
         switch (state_) {
-            case MotorFsmState::WaitingStart:
-            case MotorFsmState::Starting:
-            case MotorFsmState::RunningForward:
-            case MotorFsmState::RunningBackward:
-            case MotorFsmState::Decelerating:
-                return true;
-            default:
-                return false;
+        case MotorFsmState::WaitingStart:
+        case MotorFsmState::Starting:
+        case MotorFsmState::RunningForward:
+        case MotorFsmState::RunningBackward:
+        case MotorFsmState::Decelerating:
+            return true;
+        default:
+            return false;
         }
     }
 
-    bool MotorFsm::transition(MotorFsmState next, MotorEventType eventType) {
+    bool MotorFsm::transition(MotorFsmState next, MotorEventType eventType)
+    {
         MotorFsmState prev = state_;
         state_ = next;
 
@@ -48,67 +53,76 @@ namespace ungula::motor {
 
     // ---- Enable / Disable ----
 
-    bool MotorFsm::requestEnable() {
+    bool MotorFsm::requestEnable()
+    {
         if (state_ != MotorFsmState::Disabled) {
             return false;
         }
         return transition(MotorFsmState::Idle, MotorEventType::StateChanged);
     }
 
-    bool MotorFsm::requestDisable() {
+    bool MotorFsm::requestDisable()
+    {
         // Can disable from any state
         return transition(MotorFsmState::Disabled, MotorEventType::Stopped);
     }
 
     // ---- Motion start ----
 
-    bool MotorFsm::requestMoveForward() {
+    bool MotorFsm::requestMoveForward()
+    {
         if (state_ != MotorFsmState::Idle) {
             return false;
         }
         return transition(MotorFsmState::Starting, MotorEventType::Started);
     }
 
-    bool MotorFsm::requestMoveBackward() {
+    bool MotorFsm::requestMoveBackward()
+    {
         if (state_ != MotorFsmState::Idle) {
             return false;
         }
         return transition(MotorFsmState::Starting, MotorEventType::Started);
     }
 
-    bool MotorFsm::requestWaitStart() {
+    bool MotorFsm::requestWaitStart()
+    {
         if (state_ != MotorFsmState::Idle) {
             return false;
         }
         return transition(MotorFsmState::WaitingStart, MotorEventType::StateChanged);
     }
 
-    bool MotorFsm::requestStarting() {
+    bool MotorFsm::requestStarting()
+    {
         if (state_ != MotorFsmState::WaitingStart && state_ != MotorFsmState::Idle) {
             return false;
         }
         return transition(MotorFsmState::Starting, MotorEventType::Started);
     }
 
-    bool MotorFsm::requestRunning(Direction dir) {
+    bool MotorFsm::requestRunning(Direction dir)
+    {
         if (state_ != MotorFsmState::Starting) {
             return false;
         }
-        MotorFsmState target = (dir == Direction::FORWARD) ? MotorFsmState::RunningForward
-                                                           : MotorFsmState::RunningBackward;
+        MotorFsmState target = (dir == Direction::FORWARD) ? MotorFsmState::RunningForward :
+                                                             MotorFsmState::RunningBackward;
         return transition(target, MotorEventType::StateChanged);
     }
 
     // ---- Motion stop ----
 
-    bool MotorFsm::requestDecelerate() {
+    bool MotorFsm::requestDecelerate()
+    {
         if (!isMoving()) {
             return false;
         }
         return transition(MotorFsmState::Decelerating, MotorEventType::StateChanged);
     }
 
-    bool MotorFsm::requestStop() {
+    bool MotorFsm::requestStop()
+    {
         // Active motion (incl. Decelerating, which `isMoving()` covers).
         if (isMoving()) {
             return transition(MotorFsmState::Idle, MotorEventType::Stopped);
@@ -124,7 +138,8 @@ namespace ungula::motor {
         return false;
     }
 
-    bool MotorFsm::requestEmergencyStop() {
+    bool MotorFsm::requestEmergencyStop()
+    {
         if (state_ == MotorFsmState::Disabled) {
             return false;
         }
@@ -133,28 +148,32 @@ namespace ungula::motor {
 
     // ---- Target / Limit / Faults ----
 
-    bool MotorFsm::requestTargetReached() {
+    bool MotorFsm::requestTargetReached()
+    {
         if (!isMoving()) {
             return false;
         }
         return transition(MotorFsmState::TargetReached, MotorEventType::TargetReached);
     }
 
-    bool MotorFsm::requestLimitHit() {
+    bool MotorFsm::requestLimitHit()
+    {
         if (!isMoving()) {
             return false;
         }
         return transition(MotorFsmState::LimitReached, MotorEventType::LimitSwitchHit);
     }
 
-    bool MotorFsm::requestStallDetected() {
+    bool MotorFsm::requestStallDetected()
+    {
         if (!isMoving()) {
             return false;
         }
         return transition(MotorFsmState::Stall, MotorEventType::StallDetected);
     }
 
-    bool MotorFsm::requestFault() {
+    bool MotorFsm::requestFault()
+    {
         if (state_ == MotorFsmState::Disabled) {
             return false;
         }
@@ -163,18 +182,20 @@ namespace ungula::motor {
 
     // ---- Acknowledgements ----
 
-    bool MotorFsm::clearStall() {
+    bool MotorFsm::clearStall()
+    {
         if (state_ != MotorFsmState::Stall) {
             return false;
         }
         return transition(MotorFsmState::Idle, MotorEventType::StateChanged);
     }
 
-    bool MotorFsm::clearFault() {
+    bool MotorFsm::clearFault()
+    {
         if (state_ != MotorFsmState::Fault) {
             return false;
         }
         return transition(MotorFsmState::Idle, MotorEventType::StateChanged);
     }
 
-}  // namespace ungula::motor
+} // namespace ungula::motor

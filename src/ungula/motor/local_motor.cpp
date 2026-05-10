@@ -10,7 +10,8 @@
 #include <ungula/core/time/time_control.h>
 #include <cassert>
 
-namespace ungula::motor {
+namespace ungula::motor
+{
 
     // Spinlock protecting shared mutable state between the service timer
     // (esp_timer task) and caller context (motion commands from any task).
@@ -21,45 +22,53 @@ namespace ungula::motor {
     // ---- Internal service timer trampoline ----
     // Runs in esp_timer task context (not ISR), safe for FSM and callbacks.
 
-    void LocalMotor::onServiceTimer(void* arg) {
-        static_cast<LocalMotor*>(arg)->handleServiceTimer();
+    void LocalMotor::onServiceTimer(void *arg)
+    {
+        static_cast<LocalMotor *>(arg)->handleServiceTimer();
     }
 
     // ============================================================
     // Wiring
     // ============================================================
 
-    void LocalMotor::setDriver(IMotorDriver& driver) {
+    void LocalMotor::setDriver(IMotorDriver &driver)
+    {
         driver_ = &driver;
     }
 
-    void LocalMotor::addLimitBackward(uint8_t pin) {
+    void LocalMotor::addLimitBackward(uint8_t pin)
+    {
         if (backwardLimitCount_ < limit::MAX_PER_DIRECTION) {
             limitsBackward_[backwardLimitCount_].configure(pin);
             backwardLimitCount_++;
         }
     }
 
-    void LocalMotor::addLimitForward(uint8_t pin) {
+    void LocalMotor::addLimitForward(uint8_t pin)
+    {
         if (forwardLimitCount_ < limit::MAX_PER_DIRECTION) {
             limitsForward_[forwardLimitCount_].configure(pin);
             forwardLimitCount_++;
         }
     }
 
-    void LocalMotor::setHomingStrategy(ungula::motor::homing::IHomingStrategy* strategy) {
+    void LocalMotor::setHomingStrategy(ungula::motor::homing::IHomingStrategy *strategy)
+    {
         homingStrategy_ = strategy;
     }
 
-    void LocalMotor::setHomingTimeout(int64_t timeoutMs) {
+    void LocalMotor::setHomingTimeout(int64_t timeoutMs)
+    {
         homingTimeoutMs_ = timeoutMs;
     }
 
-    bool LocalMotor::subscribe(IMotorEventListener* listener) {
+    bool LocalMotor::subscribe(IMotorEventListener *listener)
+    {
         return eventPublisher_.subscribe(listener);
     }
 
-    bool LocalMotor::unsubscribe(IMotorEventListener* listener) {
+    bool LocalMotor::unsubscribe(IMotorEventListener *listener)
+    {
         return eventPublisher_.unsubscribe(listener);
     }
 
@@ -67,55 +76,67 @@ namespace ungula::motor {
     // Configuration
     // ============================================================
 
-    void LocalMotor::setAutoStopOnStall(bool enabled) {
+    void LocalMotor::setAutoStopOnStall(bool enabled)
+    {
         autoStopOnStall_ = enabled;
     }
 
-    void LocalMotor::setMicrosteps(uint16_t microsteps) {
+    void LocalMotor::setMicrosteps(uint16_t microsteps)
+    {
         if (driver_ != nullptr) {
             driver_->setMicrosteps(microsteps);
         }
     }
 
-    void LocalMotor::setRunCurrent(uint16_t milliAmps) {
+    void LocalMotor::setRunCurrent(uint16_t milliAmps)
+    {
         if (driver_ != nullptr) {
             driver_->setRunCurrent(milliAmps);
         }
     }
 
-    void LocalMotor::setCurrentCurve(const CurrentCurve& curve) {
+    void LocalMotor::setCurrentCurve(const CurrentCurve &curve)
+    {
         currentCurve_ = curve;
     }
 
-    void LocalMotor::setCurrentCurveEnabled(bool enabled) {
+    void LocalMotor::setCurrentCurveEnabled(bool enabled)
+    {
         currentCurveEnabled_ = enabled;
     }
 
-    void LocalMotor::setStepsPerMm(float stepsPerMm) {
+    void LocalMotor::setStepsPerMm(float stepsPerMm)
+    {
         stepsPerMm_ = stepsPerMm;
     }
 
-    void LocalMotor::setStepsPerDegree(float stepsPerDeg) {
+    void LocalMotor::setStepsPerDegree(float stepsPerDeg)
+    {
         stepsPerDeg_ = stepsPerDeg;
     }
 
-    void LocalMotor::setProfileSpeed(MotionProfile profile, int32_t speedSps) {
+    void LocalMotor::setProfileSpeed(MotionProfile profile, int32_t speedSps)
+    {
         profiles_[static_cast<uint8_t>(profile)].speedSps = speedSps;
     }
 
-    void LocalMotor::setProfileSpeed(MotionProfile profile, SpeedValue speed) {
+    void LocalMotor::setProfileSpeed(MotionProfile profile, SpeedValue speed)
+    {
         profiles_[static_cast<uint8_t>(profile)].speedSps = convertToSps(speed);
     }
 
-    void LocalMotor::setProfileAccel(MotionProfile profile, uint32_t accelMs) {
+    void LocalMotor::setProfileAccel(MotionProfile profile, uint32_t accelMs)
+    {
         profiles_[static_cast<uint8_t>(profile)].accelTimeMs = accelMs;
     }
 
-    void LocalMotor::setProfileDecel(MotionProfile profile, uint32_t decelMs) {
+    void LocalMotor::setProfileDecel(MotionProfile profile, uint32_t decelMs)
+    {
         profiles_[static_cast<uint8_t>(profile)].decelTimeMs = decelMs;
     }
 
-    void LocalMotor::setActiveProfile(MotionProfile profile) {
+    void LocalMotor::setActiveProfile(MotionProfile profile)
+    {
         activeProfile_ = profile;
     }
 
@@ -123,7 +144,8 @@ namespace ungula::motor {
     // Lifecycle
     // ============================================================
 
-    bool LocalMotor::begin() {
+    bool LocalMotor::begin()
+    {
         assert(driver_ != nullptr);
 
         // Seed every profile that the user did not configure with a safe
@@ -133,7 +155,7 @@ namespace ungula::motor {
         // with a 500 ms ramp rarely damages anything and is visible to
         // the eye, which is what a "first run" project wants.
         for (int32_t i = 0; i < PROFILE_COUNT; ++i) {
-            ProfileConfig& p = profiles_[i];
+            ProfileConfig &p = profiles_[i];
             if (p.speedSps == 0) {
                 p.speedSps = 500;
             }
@@ -189,7 +211,8 @@ namespace ungula::motor {
         return true;
     }
 
-    void LocalMotor::end() {
+    void LocalMotor::end()
+    {
         // Stop service timer
         if (serviceTimer_ != nullptr) {
             esp_timer_handle_t svcTimer = static_cast<esp_timer_handle_t>(serviceTimer_);
@@ -208,15 +231,16 @@ namespace ungula::motor {
 
     // Helper used at every motion-end transition and at idle: implements
     // the per-host idle policy chosen with LocalMotor::setIdleMode().
-    static inline void parkDriverForIdle(motor::IMotorDriver* drv,
-                                         motor::LocalMotor::IdleMode mode) {
+    static inline void parkDriverForIdle(motor::IMotorDriver *drv, motor::LocalMotor::IdleMode mode)
+    {
         if (mode == motor::LocalMotor::IdleMode::AutoDisable) {
             drv->disable();
         }
         // HoldCurrent: leave EN low so coils stay energised at IHOLD.
     }
 
-    void LocalMotor::enable() {
+    void LocalMotor::enable()
+    {
         if (fsm_.state() != MotorFsmState::Disabled) {
             return;
         }
@@ -234,7 +258,8 @@ namespace ungula::motor {
         applyCurrentForSpeed(0);
     }
 
-    void LocalMotor::disable() {
+    void LocalMotor::disable()
+    {
         abortHomingIfRunning();
         stepper_.hardStop();
         portENTER_CRITICAL(&g_motorMux);
@@ -251,7 +276,8 @@ namespace ungula::motor {
     // IMotor — motion commands
     // ============================================================
 
-    void LocalMotor::moveForward() {
+    void LocalMotor::moveForward()
+    {
         if (fsm_.state() != MotorFsmState::Idle) {
             return;
         }
@@ -259,14 +285,15 @@ namespace ungula::motor {
         lastStopReason_ = StopReason::None;
         direction_ = Direction::FORWARD;
         applyDirection();
-        stepper_.clearTargetPosition();  // Continuous — no ISR target
-        auto& profile = profiles_[static_cast<uint8_t>(activeProfile_)];
+        stepper_.clearTargetPosition(); // Continuous — no ISR target
+        auto &profile = profiles_[static_cast<uint8_t>(activeProfile_)];
         startMotion(profile.speedSps, profile.accelTimeMs, profile.decelTimeMs);
         fsm_.requestMoveForward();
         fsm_.requestRunning(Direction::FORWARD);
     }
 
-    void LocalMotor::moveBackward() {
+    void LocalMotor::moveBackward()
+    {
         if (fsm_.state() != MotorFsmState::Idle) {
             return;
         }
@@ -274,18 +301,20 @@ namespace ungula::motor {
         lastStopReason_ = StopReason::None;
         direction_ = Direction::BACKWARD;
         applyDirection();
-        stepper_.clearTargetPosition();  // Continuous — no ISR target
-        auto& profile = profiles_[static_cast<uint8_t>(activeProfile_)];
+        stepper_.clearTargetPosition(); // Continuous — no ISR target
+        auto &profile = profiles_[static_cast<uint8_t>(activeProfile_)];
         startMotion(profile.speedSps, profile.accelTimeMs, profile.decelTimeMs);
         fsm_.requestMoveBackward();
         fsm_.requestRunning(Direction::BACKWARD);
     }
 
-    void LocalMotor::moveTo(float target, DistanceUnit unit) {
+    void LocalMotor::moveTo(float target, DistanceUnit unit)
+    {
         moveToAbsolute(convertToSteps(target, unit));
     }
 
-    void LocalMotor::moveToAbsolute(int32_t absoluteTarget) {
+    void LocalMotor::moveToAbsolute(int32_t absoluteTarget)
+    {
         if (fsm_.state() != MotorFsmState::Idle) {
             return;
         }
@@ -312,13 +341,14 @@ namespace ungula::motor {
         // when the target is reached — zero overshoot.
         stepper_.setTargetPosition(absoluteTarget);
 
-        auto& profile = profiles_[static_cast<uint8_t>(activeProfile_)];
+        auto &profile = profiles_[static_cast<uint8_t>(activeProfile_)];
         startMotion(profile.speedSps, profile.accelTimeMs, profile.decelTimeMs);
         fsm_.requestStarting();
         fsm_.requestRunning(dir);
     }
 
-    void LocalMotor::moveBy(float delta, DistanceUnit unit) {
+    void LocalMotor::moveBy(float delta, DistanceUnit unit)
+    {
         int32_t deltaSteps = convertToSteps(delta, unit);
         if (deltaSteps == 0) {
             return;
@@ -327,7 +357,8 @@ namespace ungula::motor {
         moveToAbsolute(currentPos + deltaSteps);
     }
 
-    void LocalMotor::executeProfile(const MotionProfileSpec& profile) {
+    void LocalMotor::executeProfile(const MotionProfileSpec &profile)
+    {
         if (fsm_.state() != MotorFsmState::Idle) {
             return;
         }
@@ -348,7 +379,8 @@ namespace ungula::motor {
         }
     }
 
-    void LocalMotor::updateSpeed(int32_t speedSps, uint32_t accelMs, uint32_t decelMs) {
+    void LocalMotor::updateSpeed(int32_t speedSps, uint32_t accelMs, uint32_t decelMs)
+    {
         if (!fsm_.isMoving()) {
             return;
         }
@@ -357,11 +389,13 @@ namespace ungula::motor {
         stepper_.setSpeed(speedSps, accelMs, decelMs);
     }
 
-    void LocalMotor::updateSpeed(SpeedValue speed, uint32_t accelMs, uint32_t decelMs) {
+    void LocalMotor::updateSpeed(SpeedValue speed, uint32_t accelMs, uint32_t decelMs)
+    {
         updateSpeed(convertToSps(speed), accelMs, decelMs);
     }
 
-    void LocalMotor::stop() {
+    void LocalMotor::stop()
+    {
         // A soft stop still counts as "stop homing" — the strategy can't
         // make progress if we're ramping to zero.
         abortHomingIfRunning();
@@ -369,7 +403,8 @@ namespace ungula::motor {
         fsm_.requestDecelerate();
     }
 
-    void LocalMotor::emergencyStop() {
+    void LocalMotor::emergencyStop()
+    {
         abortHomingIfRunning();
         stepper_.hardStop();
         stepper_.clearTargetPosition();
@@ -393,23 +428,28 @@ namespace ungula::motor {
     // IMotor — state queries
     // ============================================================
 
-    MotorFsmState LocalMotor::state() const {
+    MotorFsmState LocalMotor::state() const
+    {
         return fsm_.state();
     }
 
-    int32_t LocalMotor::positionSteps() const {
+    int32_t LocalMotor::positionSteps() const
+    {
         return stepper_.position();
     }
 
-    bool LocalMotor::isMoving() const {
+    bool LocalMotor::isMoving() const
+    {
         return fsm_.isMoving();
     }
 
-    bool LocalMotor::isIdle() const {
+    bool LocalMotor::isIdle() const
+    {
         return fsm_.state() == MotorFsmState::Idle;
     }
 
-    bool LocalMotor::isStalling() const {
+    bool LocalMotor::isStalling() const
+    {
         // Either the FSM is latched in Stall (waiting for clearStall) or
         // the driver is asserting stall right now. One getter, both views.
         if (fsm_.state() == MotorFsmState::Stall) {
@@ -418,19 +458,23 @@ namespace ungula::motor {
         return (driver_ != nullptr) && driver_->isStalling();
     }
 
-    StopReason LocalMotor::lastStopReason() const {
+    StopReason LocalMotor::lastStopReason() const
+    {
         return lastStopReason_;
     }
 
-    bool LocalMotor::wasLimitHit() const {
+    bool LocalMotor::wasLimitHit() const
+    {
         return wasLimitHit_;
     }
 
-    bool LocalMotor::isLimitActive(Direction dir) const {
+    bool LocalMotor::isLimitActive(Direction dir) const
+    {
         return (dir == Direction::BACKWARD) ? isBackwardLimitHit() : isForwardLimitHit();
     }
 
-    bool LocalMotor::isLimitActive(Direction dir, int32_t index) const {
+    bool LocalMotor::isLimitActive(Direction dir, int32_t index) const
+    {
         if (index < 0 || index >= limit::MAX_PER_DIRECTION) {
             return false;
         }
@@ -446,15 +490,18 @@ namespace ungula::motor {
         return limitsForward_[index].isTriggered();
     }
 
-    int32_t LocalMotor::limitCount(Direction dir) const {
+    int32_t LocalMotor::limitCount(Direction dir) const
+    {
         return (dir == Direction::BACKWARD) ? backwardLimitCount_ : forwardLimitCount_;
     }
 
-    bool LocalMotor::isHoming() const {
+    bool LocalMotor::isHoming() const
+    {
         return homingPhase_ == HomingPhase::Running;
     }
 
-    bool LocalMotor::isHomed() const {
+    bool LocalMotor::isHomed() const
+    {
         return isHomed_;
     }
 
@@ -462,7 +509,8 @@ namespace ungula::motor {
     // Position
     // ============================================================
 
-    void LocalMotor::resetPosition() {
+    void LocalMotor::resetPosition()
+    {
         if (fsm_.isMoving()) {
             return;
         }
@@ -473,9 +521,10 @@ namespace ungula::motor {
     // Homing (internal black-box)
     // ============================================================
 
-    void LocalMotor::home() {
+    void LocalMotor::home()
+    {
         if (homingStrategy_ == nullptr) {
-            return;  // nothing configured — home() is a no-op
+            return; // nothing configured — home() is a no-op
         }
         // Cancel whatever was happening. This also aborts a previous home()
         // run cleanly (abortHomingIfRunning is called by emergencyStop).
@@ -494,7 +543,8 @@ namespace ungula::motor {
         internalMotionFromHoming_ = false;
     }
 
-    void LocalMotor::abortHomingIfRunning() {
+    void LocalMotor::abortHomingIfRunning()
+    {
         if (homingPhase_ != HomingPhase::Running) {
             return;
         }
@@ -516,7 +566,8 @@ namespace ungula::motor {
         }
     }
 
-    void LocalMotor::invalidateHomedIfUserMotion() {
+    void LocalMotor::invalidateHomedIfUserMotion()
+    {
         if (!internalMotionFromHoming_) {
             isHomed_ = false;
         }
@@ -525,7 +576,8 @@ namespace ungula::motor {
     // Runs from handleServiceTimer — in-phase with FSM transitions so the
     // strategy sees TargetReached before the service loop's auto-clear
     // collapses it to Idle.
-    void LocalMotor::serviceHoming(int64_t nowMs) {
+    void LocalMotor::serviceHoming(int64_t nowMs)
+    {
         if (homingPhase_ != HomingPhase::Running || homingStrategy_ == nullptr) {
             return;
         }
@@ -555,13 +607,15 @@ namespace ungula::motor {
     // Fault acknowledgement
     // ============================================================
 
-    void LocalMotor::clearStall() {
+    void LocalMotor::clearStall()
+    {
         lastStopReason_ = StopReason::None;
         driver_->clearStall();
         fsm_.clearStall();
     }
 
-    void LocalMotor::clearFault() {
+    void LocalMotor::clearFault()
+    {
         fsm_.clearFault();
     }
 
@@ -574,7 +628,8 @@ namespace ungula::motor {
     // Handles: limit switches, stall detection, target position management,
     // auto-stop detection, and FSM terminal state transitions.
 
-    void LocalMotor::handleServiceTimer() {
+    void LocalMotor::handleServiceTimer()
+    {
         // Snapshot position for FSM event stamping and service logic
         cachedPosition_ = stepper_.position();
 
@@ -688,8 +743,7 @@ namespace ungula::motor {
         // intentionally NOT cleared here — those require an explicit
         // host acknowledgement.
         MotorFsmState afterState = fsm_.state();
-        if (afterState == MotorFsmState::TargetReached ||
-            afterState == MotorFsmState::LimitReached) {
+        if (afterState == MotorFsmState::TargetReached || afterState == MotorFsmState::LimitReached) {
             fsm_.requestStop();
         }
     }
@@ -698,7 +752,8 @@ namespace ungula::motor {
     // Diagnostics
     // ============================================================
 
-    float LocalMotor::currentSpeed() const {
+    float LocalMotor::currentSpeed() const
+    {
         return stepper_.currentSpeed();
     }
 
@@ -706,12 +761,14 @@ namespace ungula::motor {
     // Internal helpers
     // ============================================================
 
-    void LocalMotor::applyDirection() {
+    void LocalMotor::applyDirection()
+    {
         stepper_.setDirectionForward(direction_ == Direction::FORWARD);
         driver_->setDirection(direction_);
     }
 
-    bool LocalMotor::isBackwardLimitHit() const {
+    bool LocalMotor::isBackwardLimitHit() const
+    {
         for (int32_t idx = 0; idx < backwardLimitCount_; idx++) {
             if (limitsBackward_[idx].isTriggered()) {
                 return true;
@@ -720,7 +777,8 @@ namespace ungula::motor {
         return false;
     }
 
-    bool LocalMotor::isForwardLimitHit() const {
+    bool LocalMotor::isForwardLimitHit() const
+    {
         for (int32_t idx = 0; idx < forwardLimitCount_; idx++) {
             if (limitsForward_[idx].isTriggered()) {
                 return true;
@@ -729,14 +787,16 @@ namespace ungula::motor {
         return false;
     }
 
-    bool LocalMotor::isLimitHitInDirection() const {
+    bool LocalMotor::isLimitHitInDirection() const
+    {
         if (direction_ == Direction::BACKWARD) {
             return isBackwardLimitHit();
         }
         return isForwardLimitHit();
     }
 
-    void LocalMotor::handleStall() {
+    void LocalMotor::handleStall()
+    {
         if (autoStopOnStall_) {
             stepper_.hardStop();
             portENTER_CRITICAL(&g_motorMux);
@@ -747,7 +807,8 @@ namespace ungula::motor {
         lastStopReason_ = StopReason::Stall;
     }
 
-    void LocalMotor::serviceMoving() {
+    void LocalMotor::serviceMoving()
+    {
         // Snapshot shared state under lock
         portENTER_CRITICAL(&g_motorMux);
         bool snapHasTarget = hasTarget_;
@@ -760,8 +821,7 @@ namespace ungula::motor {
         }
 
         int32_t pos = cachedPosition_;
-        int32_t remaining = (direction_ == Direction::FORWARD) ? (snapMoveTarget - pos)
-                                                               : (pos - snapMoveTarget);
+        int32_t remaining = (direction_ == Direction::FORWARD) ? (snapMoveTarget - pos) : (pos - snapMoveTarget);
 
         // Hard limit — if we overshot, stop immediately
         if (remaining <= 0) {
@@ -788,7 +848,7 @@ namespace ungula::motor {
             }
 
             if (remaining <= decelSteps) {
-                stepper_.stop();  // Soft stop — ramp to zero
+                stepper_.stop(); // Soft stop — ramp to zero
                 fsm_.requestDecelerate();
                 portENTER_CRITICAL(&g_motorMux);
                 decelerating_ = true;
@@ -797,7 +857,8 @@ namespace ungula::motor {
         }
     }
 
-    void LocalMotor::servicePendingProfile(int64_t nowMs) {
+    void LocalMotor::servicePendingProfile(int64_t nowMs)
+    {
         // Snapshot profile under lock — caller may write from another context
         portENTER_CRITICAL(&g_motorMux);
         if (!hasPendingProfile_) {
@@ -836,7 +897,8 @@ namespace ungula::motor {
         fsm_.requestRunning(direction_);
     }
 
-    void LocalMotor::startMotion(int32_t speedSps, uint32_t accelMs, uint32_t decelMs) {
+    void LocalMotor::startMotion(int32_t speedSps, uint32_t accelMs, uint32_t decelMs)
+    {
         decelerating_ = false;
 
         // Re-energise the driver. The lib auto-disables EN at every
@@ -858,39 +920,42 @@ namespace ungula::motor {
         stepper_.start();
     }
 
-    void LocalMotor::applyCurrentForSpeed(int32_t speedSps) {
+    void LocalMotor::applyCurrentForSpeed(int32_t speedSps)
+    {
         if (!currentCurveEnabled_ || driver_ == nullptr) {
             return;
         }
         driver_->setRunCurrent(currentMaForSps(currentCurve_, speedSps));
     }
 
-    int32_t LocalMotor::convertToSps(SpeedValue speed) const {
+    int32_t LocalMotor::convertToSps(SpeedValue speed) const
+    {
         switch (speed.unit) {
-            case SpeedUnit::STEPS_PER_SEC:
-                return static_cast<int32_t>(speed.value);
-            case SpeedUnit::MM_PER_SEC:
-                return static_cast<int32_t>(speed.value * stepsPerMm_);
-            case SpeedUnit::CM_PER_SEC:
-                return static_cast<int32_t>(speed.value * CM_TO_MM * stepsPerMm_);
-            case SpeedUnit::DEGREES_PER_SEC:
-                return static_cast<int32_t>(speed.value * stepsPerDeg_);
+        case SpeedUnit::STEPS_PER_SEC:
+            return static_cast<int32_t>(speed.value);
+        case SpeedUnit::MM_PER_SEC:
+            return static_cast<int32_t>(speed.value * stepsPerMm_);
+        case SpeedUnit::CM_PER_SEC:
+            return static_cast<int32_t>(speed.value * CM_TO_MM * stepsPerMm_);
+        case SpeedUnit::DEGREES_PER_SEC:
+            return static_cast<int32_t>(speed.value * stepsPerDeg_);
         }
         return static_cast<int32_t>(speed.value);
     }
 
-    int32_t LocalMotor::convertToSteps(float value, DistanceUnit unit) const {
+    int32_t LocalMotor::convertToSteps(float value, DistanceUnit unit) const
+    {
         switch (unit) {
-            case DistanceUnit::STEPS:
-                return static_cast<int32_t>(value);
-            case DistanceUnit::MM:
-                return static_cast<int32_t>(value * stepsPerMm_);
-            case DistanceUnit::CM:
-                return static_cast<int32_t>(value * CM_TO_MM * stepsPerMm_);
-            case DistanceUnit::DEGREES:
-                return static_cast<int32_t>(value * stepsPerDeg_);
+        case DistanceUnit::STEPS:
+            return static_cast<int32_t>(value);
+        case DistanceUnit::MM:
+            return static_cast<int32_t>(value * stepsPerMm_);
+        case DistanceUnit::CM:
+            return static_cast<int32_t>(value * CM_TO_MM * stepsPerMm_);
+        case DistanceUnit::DEGREES:
+            return static_cast<int32_t>(value * stepsPerDeg_);
         }
         return static_cast<int32_t>(value);
     }
 
-}  // namespace ungula::motor
+} // namespace ungula::motor

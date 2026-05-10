@@ -11,12 +11,14 @@
 #include <cassert>
 #include <cstdio>
 
-namespace ungula::motor::tmc {
+namespace ungula::motor::tmc
+{
 
     //
     // CRC8 — polynomial 0x07, LSB-first per byte
     //
-    uint8_t Tmc2209::calcCrc(const uint8_t* data, uint8_t length) {
+    uint8_t Tmc2209::calcCrc(const uint8_t *data, uint8_t length)
+    {
         uint8_t crc = 0;
         for (uint8_t idx = 0; idx < length; idx++) {
             uint8_t currentByte = data[idx];
@@ -36,7 +38,8 @@ namespace ungula::motor::tmc {
     // Raw register write — 8-byte datagram
     // [sync] [addr] [reg|WRITE_FLAG] [d3] [d2] [d1] [d0] [crc]
     //
-    void Tmc2209::writeRegister(uint8_t regAddr, uint32_t value) {
+    void Tmc2209::writeRegister(uint8_t regAddr, uint32_t value)
+    {
         uint8_t datagram[WRITE_DATAGRAM_LEN];
         datagram[0] = SYNC_BYTE;
         datagram[1] = address_;
@@ -66,7 +69,8 @@ namespace ungula::motor::tmc {
     // Reply:   [sync] [0xFF] [reg] [d3] [d2] [d1] [d0] [crc]
     // On single-wire we also see our own 4-byte echo before the reply.
     //
-    uint32_t Tmc2209::readRegister(uint8_t regAddr) {
+    uint32_t Tmc2209::readRegister(uint8_t regAddr)
+    {
         uint8_t request[READ_REQUEST_LEN];
         request[0] = SYNC_BYTE;
         request[1] = address_;
@@ -89,8 +93,7 @@ namespace ungula::motor::tmc {
 
         // Scan for reply: sync + master addr (0xFF) + matching register
         for (int32_t pos = 0; pos <= bytesRead - READ_REPLY_LEN; pos++) {
-            if (buffer[pos] != SYNC_BYTE || buffer[pos + 1] != REPLY_MASTER_ADDR ||
-                buffer[pos + 2] != regAddr) {
+            if (buffer[pos] != SYNC_BYTE || buffer[pos + 1] != REPLY_MASTER_ADDR || buffer[pos + 2] != regAddr) {
                 continue;
             }
 
@@ -98,10 +101,8 @@ namespace ungula::motor::tmc {
                 continue;
             }
 
-            return (static_cast<uint32_t>(buffer[pos + 3]) << 24) |
-                   (static_cast<uint32_t>(buffer[pos + 4]) << 16) |
-                   (static_cast<uint32_t>(buffer[pos + 5]) << 8) |
-                   (static_cast<uint32_t>(buffer[pos + 6]));
+            return (static_cast<uint32_t>(buffer[pos + 3]) << 24) | (static_cast<uint32_t>(buffer[pos + 4]) << 16) |
+                   (static_cast<uint32_t>(buffer[pos + 5]) << 8) | (static_cast<uint32_t>(buffer[pos + 6]));
         }
 
         return 0;
@@ -110,36 +111,42 @@ namespace ungula::motor::tmc {
     //
     // Construction + initialization
     //
-    Tmc2209::Tmc2209(ungula::hal::uart::Uart& uart, float rSense, uint8_t stepPin,
-                     uint8_t enablePin, uint8_t dirPin, uint8_t address)
-        : uart_(uart),
-          rSense_(rSense),
-          stepPin_(stepPin),
-          enablePin_(enablePin),
-          dirPin_(dirPin),
-          address_(address) {
+    Tmc2209::Tmc2209(ungula::hal::uart::Uart &uart, float rSense, uint8_t stepPin, uint8_t enablePin, uint8_t dirPin,
+                     uint8_t address)
+            : uart_(uart)
+            , rSense_(rSense)
+            , stepPin_(stepPin)
+            , enablePin_(enablePin)
+            , dirPin_(dirPin)
+            , address_(address)
+    {
         assert(stepPin_ != ungula::motor::GPIO_NONE);
         assert(enablePin_ != ungula::motor::GPIO_NONE);
         assert(dirPin_ != ungula::motor::GPIO_NONE);
     }
 
-    const char* Tmc2209::module() const {
+    const char *Tmc2209::module() const
+    {
         return "motor_driver";
     }
 
-    const char* Tmc2209::info() const {
+    const char *Tmc2209::info() const
+    {
         return infoBuf_;
     }
 
-    void Tmc2209::enable() {
+    void Tmc2209::enable()
+    {
         ungula::hal::gpio::setLow(enablePin_);
     }
 
-    void Tmc2209::disable() {
+    void Tmc2209::disable()
+    {
         ungula::hal::gpio::setHigh(enablePin_);
     }
 
-    void Tmc2209::setDirection(ungula::motor::Direction dir) {
+    void Tmc2209::setDirection(ungula::motor::Direction dir)
+    {
         currentDirection_ = dir;
         if (dir == ungula::motor::Direction::FORWARD) {
             ungula::hal::gpio::setHigh(dirPin_);
@@ -148,15 +155,18 @@ namespace ungula::motor::tmc {
         }
     }
 
-    uint8_t Tmc2209::stepPin() const {
+    uint8_t Tmc2209::stepPin() const
+    {
         return stepPin_;
     }
 
-    void Tmc2209::setDirectionInverted(bool inverted) {
+    void Tmc2209::setDirectionInverted(bool inverted)
+    {
         setShaft(inverted);
     }
 
-    void Tmc2209::begin() {
+    void Tmc2209::begin()
+    {
         // Create UART mutex once. Safe to call multiple times (guard on null).
         if (uartMutex_ == nullptr) {
             uartMutex_ = xSemaphoreCreateMutex();
@@ -165,7 +175,7 @@ namespace ungula::motor::tmc {
         // Configure GPIO pins owned by the driver
         ungula::hal::gpio::configOutput(enablePin_);
         ungula::hal::gpio::configOutput(dirPin_);
-        ungula::hal::gpio::setHigh(enablePin_);  // Start disabled (active LOW)
+        ungula::hal::gpio::setHigh(enablePin_); // Start disabled (active LOW)
         ungula::hal::gpio::setLow(dirPin_);
 
         // Clear global status flags (write 1 to clear)
@@ -228,22 +238,23 @@ namespace ungula::motor::tmc {
         }
 
         // Build info string after init so version() reads the real IC value
-        snprintf(infoBuf_, INFO_BUF_SIZE, "TMC2209 v0x%02X @ UART%u addr=%u", version(),
-                 uart_.port(), address_);
+        snprintf(infoBuf_, INFO_BUF_SIZE, "TMC2209 v0x%02X @ UART%u addr=%u", version(), uart_.port(), address_);
 
         // Post-init register snapshot — diff this against OLD basic_motor's
         // post-init dump to find any silent register-write divergence.
         dumpRegisters("post-begin");
     }
 
-    void Tmc2209::setRunCurrent(uint16_t milliAmps) {
+    void Tmc2209::setRunCurrent(uint16_t milliAmps)
+    {
         setRunCurrent(milliAmps, holdFraction_);
     }
 
     //
     // Bit/field helpers — update cache, write full register
     //
-    void Tmc2209::setBit(uint32_t& cache, uint8_t regAddr, uint32_t mask, bool value) {
+    void Tmc2209::setBit(uint32_t &cache, uint8_t regAddr, uint32_t mask, bool value)
+    {
         if (value) {
             cache |= mask;
         } else {
@@ -252,7 +263,8 @@ namespace ungula::motor::tmc {
         writeRegister(regAddr, cache);
     }
 
-    void Tmc2209::setField(uint32_t& cache, uint8_t regAddr, uint32_t mask, uint32_t value) {
+    void Tmc2209::setField(uint32_t &cache, uint8_t regAddr, uint32_t mask, uint32_t value)
+    {
         cache = (cache & ~mask) | (value & mask);
         writeRegister(regAddr, cache);
     }
@@ -260,89 +272,98 @@ namespace ungula::motor::tmc {
     //
     // GCONF configuration
     //
-    void Tmc2209::setInternalRsense(bool enable) {
+    void Tmc2209::setInternalRsense(bool enable)
+    {
         setBit(gconf_, reg::GCONF, gconf::INTERNAL_RSENSE, enable);
     }
-    void Tmc2209::setSpreadCycle(bool enable) {
+    void Tmc2209::setSpreadCycle(bool enable)
+    {
         setBit(gconf_, reg::GCONF, gconf::EN_SPREADCYCLE, enable);
     }
-    void Tmc2209::setPdnDisable(bool disable) {
+    void Tmc2209::setPdnDisable(bool disable)
+    {
         setBit(gconf_, reg::GCONF, gconf::PDN_DISABLE, disable);
     }
-    void Tmc2209::setIScaleAnalog(bool enable) {
+    void Tmc2209::setIScaleAnalog(bool enable)
+    {
         setBit(gconf_, reg::GCONF, gconf::I_SCALE_ANALOG, enable);
     }
-    void Tmc2209::setShaft(bool reverse) {
+    void Tmc2209::setShaft(bool reverse)
+    {
         setBit(gconf_, reg::GCONF, gconf::SHAFT, reverse);
     }
 
     //
     // CHOPCONF configuration
     //
-    void Tmc2209::setToff(uint8_t offTime) {
+    void Tmc2209::setToff(uint8_t offTime)
+    {
         setField(chopconf_, reg::CHOPCONF, chop::TOFF_MASK, offTime & 0x0FU);
     }
 
-    void Tmc2209::setBlankTime(uint8_t blankTime) {
-        setField(chopconf_, reg::CHOPCONF, chop::TBL_MASK,
-                 static_cast<uint32_t>(blankTime & 0x03U) << chop::TBL_SHIFT);
+    void Tmc2209::setBlankTime(uint8_t blankTime)
+    {
+        setField(chopconf_, reg::CHOPCONF, chop::TBL_MASK, static_cast<uint32_t>(blankTime & 0x03U) << chop::TBL_SHIFT);
     }
 
-    void Tmc2209::setHstrt(uint8_t hstrt) {
-        setField(chopconf_, reg::CHOPCONF, chop::HSTRT_MASK,
-                 static_cast<uint32_t>(hstrt & 0x07U) << chop::HSTRT_SHIFT);
+    void Tmc2209::setHstrt(uint8_t hstrt)
+    {
+        setField(chopconf_, reg::CHOPCONF, chop::HSTRT_MASK, static_cast<uint32_t>(hstrt & 0x07U) << chop::HSTRT_SHIFT);
     }
 
-    void Tmc2209::setHend(uint8_t hend) {
-        setField(chopconf_, reg::CHOPCONF, chop::HEND_MASK,
-                 static_cast<uint32_t>(hend & 0x0FU) << chop::HEND_SHIFT);
+    void Tmc2209::setHend(uint8_t hend)
+    {
+        setField(chopconf_, reg::CHOPCONF, chop::HEND_MASK, static_cast<uint32_t>(hend & 0x0FU) << chop::HEND_SHIFT);
     }
 
-    void Tmc2209::setMicrosteps(uint16_t microsteps) {
+    void Tmc2209::setMicrosteps(uint16_t microsteps)
+    {
         microsteps_ = microsteps;
         uint8_t mres = mresFromMicrosteps(microsteps);
-        setField(chopconf_, reg::CHOPCONF, chop::MRES_MASK,
-                 static_cast<uint32_t>(mres) << chop::MRES_SHIFT);
+        setField(chopconf_, reg::CHOPCONF, chop::MRES_MASK, static_cast<uint32_t>(mres) << chop::MRES_SHIFT);
 
         // Enable mstep_reg_select so MRES in CHOPCONF is used (not MS1/MS2 pins)
         setBit(gconf_, reg::GCONF, gconf::MSTEP_REG_SEL, true);
     }
 
-    void Tmc2209::setInterpol(bool enable) {
+    void Tmc2209::setInterpol(bool enable)
+    {
         setBit(chopconf_, reg::CHOPCONF, chop::INTPOL, enable);
     }
 
     //
     // PWMCONF configuration
     //
-    void Tmc2209::setPwmAutoscale(bool enable) {
+    void Tmc2209::setPwmAutoscale(bool enable)
+    {
         setBit(pwmconf_, reg::PWMCONF, pwm::AUTOSCALE, enable);
     }
-    void Tmc2209::setPwmAutograd(bool enable) {
+    void Tmc2209::setPwmAutograd(bool enable)
+    {
         setBit(pwmconf_, reg::PWMCONF, pwm::AUTOGRAD, enable);
     }
 
     //
     // IHOLD_IRUN + current
     //
-    void Tmc2209::setIholddelay(uint8_t holdDelay) {
+    void Tmc2209::setIholddelay(uint8_t holdDelay)
+    {
         setField(iholdrun_, reg::IHOLD_IRUN, ihr::IHOLDDELAY_MASK,
                  static_cast<uint32_t>(holdDelay & 0x0FU) << ihr::IHOLDDELAY_SHIFT);
     }
 
-    void Tmc2209::setRunCurrent(uint16_t milliAmps, float holdFrac) {
+    void Tmc2209::setRunCurrent(uint16_t milliAmps, float holdFrac)
+    {
         float rTotal = rSense_ + RSENSE_INTERNAL;
         float currentAmps = static_cast<float>(milliAmps) / MA_PER_AMP;
 
         // Calculate current scale (CS) with standard sensitivity first
-        int32_t currentScale = static_cast<int32_t>(
-                (CS_STEPS * SQRT2 * currentAmps * rTotal / VFS_STANDARD) - 1.0F);
+        int32_t currentScale = static_cast<int32_t>((CS_STEPS * SQRT2 * currentAmps * rTotal / VFS_STANDARD) - 1.0F);
 
         bool vsense = false;
         if (currentScale < CS_VSENSE_THRESHOLD) {
             vsense = true;
-            currentScale = static_cast<int32_t>(
-                    (CS_STEPS * SQRT2 * currentAmps * rTotal / VFS_HIGH_SENS) - 1.0F);
+            currentScale = static_cast<int32_t>((CS_STEPS * SQRT2 * currentAmps * rTotal / VFS_HIGH_SENS) - 1.0F);
         }
         if (currentScale > CS_MAX) {
             currentScale = CS_MAX;
@@ -361,8 +382,7 @@ namespace ungula::motor::tmc {
         setBit(chopconf_, reg::CHOPCONF, chop::VSENSE, vsense);
 
         // Set IHOLD + IRUN, preserving IHOLDDELAY from cache
-        iholdrun_ = (iholdrun_ & ihr::IHOLDDELAY_MASK) |
-                    (static_cast<uint32_t>(ihold) & ihr::IHOLD_MASK) |
+        iholdrun_ = (iholdrun_ & ihr::IHOLDDELAY_MASK) | (static_cast<uint32_t>(ihold) & ihr::IHOLD_MASK) |
                     ((static_cast<uint32_t>(irun) << ihr::IRUN_SHIFT) & ihr::IRUN_MASK);
         writeRegister(reg::IHOLD_IRUN, iholdrun_);
     }
@@ -370,20 +390,25 @@ namespace ungula::motor::tmc {
     //
     // Standalone register writes
     //
-    void Tmc2209::setTpowerdown(uint8_t powerDelay) {
+    void Tmc2209::setTpowerdown(uint8_t powerDelay)
+    {
         writeRegister(reg::TPOWERDOWN, powerDelay);
     }
-    void Tmc2209::setTpwmthrs(uint32_t threshold) {
+    void Tmc2209::setTpwmthrs(uint32_t threshold)
+    {
         writeRegister(reg::TPWMTHRS, threshold);
     }
-    void Tmc2209::setTcoolthrs(uint32_t threshold) {
+    void Tmc2209::setTcoolthrs(uint32_t threshold)
+    {
         writeRegister(reg::TCOOLTHRS, threshold);
     }
-    void Tmc2209::setStallGuardThreshold(uint8_t threshold) {
+    void Tmc2209::setStallGuardThreshold(uint8_t threshold)
+    {
         writeRegister(reg::SGTHRS, threshold);
     }
 
-    void Tmc2209::enableStallDetection() {
+    void Tmc2209::enableStallDetection()
+    {
         // TMC2209 uses StallGuard4 (SG4) which works in StealthChop mode.
         // SpreadCycle uses SG2, but TMC2209's SG4 is designed for StealthChop.
         setSpreadCycle(false);
@@ -404,20 +429,24 @@ namespace ungula::motor::tmc {
     //
     // Status reads
     //
-    uint8_t Tmc2209::version() {
+    uint8_t Tmc2209::version()
+    {
         uint32_t ioinReg = readRegister(reg::IOIN);
         return static_cast<uint8_t>((ioinReg >> ioin::VERSION_SHIFT) & 0xFF);
     }
 
-    uint32_t Tmc2209::lastDrvStatus() {
+    uint32_t Tmc2209::lastDrvStatus()
+    {
         return lastDrvStatus_;
     }
 
-    uint32_t Tmc2209::clearGstat() {
+    uint32_t Tmc2209::clearGstat()
+    {
         return readRegister(reg::GSTAT);
     }
 
-    void Tmc2209::dumpRegisters(const char* tag) {
+    void Tmc2209::dumpRegisters(const char *tag)
+    {
         // Read every register relevant to motor behaviour. Each line is
         // self-contained so it can be diffed against an OLD-firmware dump.
         uint32_t gconf = readRegister(reg::GCONF);
@@ -434,23 +463,20 @@ namespace ungula::motor::tmc {
         uint32_t drvstatus = readRegister(reg::DRV_STATUS);
         uint32_t pwmconf = readRegister(reg::PWMCONF);
 
-        log_info_force_m(module(), "[%s] GCONF=0x%08lX GSTAT=0x%08lX IFCNT=0x%08lX IOIN=0x%08lX",
-                         tag, gconf, gstat, ifcnt, ioin);
-        log_info_force_m(
-                module(),
-                "[%s] IHOLD_IRUN=0x%08lX TPOWERDOWN=0x%08lX TPWMTHRS=0x%08lX TCOOLTHRS=0x%08lX",
-                tag, iholdrun, tpowerdown, tpwmthrs, tcoolthrs);
+        log_info_force_m(module(), "[%s] GCONF=0x%08lX GSTAT=0x%08lX IFCNT=0x%08lX IOIN=0x%08lX", tag, gconf, gstat,
+                         ifcnt, ioin);
+        log_info_force_m(module(), "[%s] IHOLD_IRUN=0x%08lX TPOWERDOWN=0x%08lX TPWMTHRS=0x%08lX TCOOLTHRS=0x%08lX", tag,
+                         iholdrun, tpowerdown, tpwmthrs, tcoolthrs);
+        log_info_force_m(module(), "[%s] SGTHRS=0x%08lX COOLCONF=0x%08lX CHOPCONF=0x%08lX PWMCONF=0x%08lX", tag, sgthrs,
+                         coolconf, chopconf, pwmconf);
         log_info_force_m(module(),
-                         "[%s] SGTHRS=0x%08lX COOLCONF=0x%08lX CHOPCONF=0x%08lX PWMCONF=0x%08lX",
-                         tag, sgthrs, coolconf, chopconf, pwmconf);
-        log_info_force_m(
-                module(),
-                "[%s] DRV_STATUS=0x%08lX rSense=%.3fOhm cache: gconf=0x%08lX chopconf=0x%08lX "
-                "pwmconf=0x%08lX iholdrun=0x%08lX",
-                tag, drvstatus, rSense_, gconf_, chopconf_, pwmconf_, iholdrun_);
+                         "[%s] DRV_STATUS=0x%08lX rSense=%.3fOhm cache: gconf=0x%08lX chopconf=0x%08lX "
+                         "pwmconf=0x%08lX iholdrun=0x%08lX",
+                         tag, drvstatus, rSense_, gconf_, chopconf_, pwmconf_, iholdrun_);
     }
 
-    uint16_t Tmc2209::readStallGuardResult() {
+    uint16_t Tmc2209::readStallGuardResult()
+    {
         constexpr uint16_t SG_RESULT_MASK = 0x3FFU;
         uint32_t raw = readRegister(reg::SG_RESULT);
         return static_cast<uint16_t>(raw & SG_RESULT_MASK);
@@ -460,7 +486,8 @@ namespace ungula::motor::tmc {
     // Stall detection configuration
     //
 
-    void Tmc2209::configureStall(const StallConfig& config) {
+    void Tmc2209::configureStall(const StallConfig &config)
+    {
         diagPin_ = config.diagPin;
         stallProfileFwd_ = config.forward;
         stallProfileBwd_ = config.backward;
@@ -472,15 +499,15 @@ namespace ungula::motor::tmc {
                          "BWD sens=%u diag=%ld sg=%.2f/%.2f/%u/%ld",
                          diagPin_, config.forward.sensitivity, config.forward.diagConfirmCount,
                          static_cast<double>(config.forward.sgSlope),
-                         static_cast<double>(config.forward.sgDropFraction),
-                         config.forward.sgMaxBaseline, config.forward.sgConfirmCount,
-                         config.backward.sensitivity, config.backward.diagConfirmCount,
+                         static_cast<double>(config.forward.sgDropFraction), config.forward.sgMaxBaseline,
+                         config.forward.sgConfirmCount, config.backward.sensitivity, config.backward.diagConfirmCount,
                          static_cast<double>(config.backward.sgSlope),
-                         static_cast<double>(config.backward.sgDropFraction),
-                         config.backward.sgMaxBaseline, config.backward.sgConfirmCount);
+                         static_cast<double>(config.backward.sgDropFraction), config.backward.sgMaxBaseline,
+                         config.backward.sgConfirmCount);
     }
 
-    void Tmc2209::applyProfile(const StallProfile& p) {
+    void Tmc2209::applyProfile(const StallProfile &p)
+    {
         stallDetector_.setDiagScoreLimit(p.diagConfirmCount);
         stallDetector_.setSgPerSps(p.sgSlope);
         stallDetector_.setSgBaselineCap(p.sgMaxBaseline);
@@ -488,7 +515,8 @@ namespace ungula::motor::tmc {
         stallDetector_.setScoreLimit(p.sgConfirmCount);
     }
 
-    void Tmc2209::setStallSensitivity(uint8_t sensitivity) {
+    void Tmc2209::setStallSensitivity(uint8_t sensitivity)
+    {
         stallProfileFwd_.sensitivity = sensitivity;
         stallProfileBwd_.sensitivity = sensitivity;
     }
@@ -497,7 +525,8 @@ namespace ungula::motor::tmc {
     // Stall detection lifecycle (IMotorDriver)
     //
 
-    void Tmc2209::prepareStallDetection(int32_t speedSps, uint32_t accelMs) {
+    void Tmc2209::prepareStallDetection(int32_t speedSps, uint32_t accelMs)
+    {
         // Select the profile for the direction that was just set via setDirection().
         // setDirection() is called by LocalMotor::applyDirection() before every
         // startMotion(), so currentDirection_ is always current here.
@@ -517,13 +546,15 @@ namespace ungula::motor::tmc {
         reconfigureStallForSpeed(speedSps);
     }
 
-    void Tmc2209::updateStallDetectionSpeed(int32_t speedSps) {
+    void Tmc2209::updateStallDetectionSpeed(int32_t speedSps)
+    {
         targetSpeedSps_ = speedSps;
         stallDetector_.configureForSpeed(speedSps);
         reconfigureStallForSpeed(speedSps);
     }
 
-    void Tmc2209::serviceStallDetection() {
+    void Tmc2209::serviceStallDetection()
+    {
         if (!isStallDetectionEnabled()) {
             return;
         }
@@ -561,11 +592,13 @@ namespace ungula::motor::tmc {
         }
     }
 
-    bool Tmc2209::isStalling() const {
+    bool Tmc2209::isStalling() const
+    {
         return stallDetector_.isStalling();
     }
 
-    void Tmc2209::clearStall() {
+    void Tmc2209::clearStall()
+    {
         stallDetector_.clear();
     }
 
@@ -575,7 +608,8 @@ namespace ungula::motor::tmc {
 
     // Reconfigure StallGuard registers for the target speed.
     // Sensitivity and TCOOLTHRS are speed-dependent.
-    void Tmc2209::reconfigureStallForSpeed(int32_t speedSps) {
+    void Tmc2209::reconfigureStallForSpeed(int32_t speedSps)
+    {
         const uint8_t sensitivity = activeProfile().sensitivity;
         if (sensitivity == 0) {
             return;
@@ -587,41 +621,43 @@ namespace ungula::motor::tmc {
     // TCOOLTHRS calculation — see local_motor.cpp for the full explanation.
     // TSTEP = fCLK * microsteps / (stepFrequency * 256)
     // We set TCOOLTHRS slightly above (1.5x) the expected TSTEP at target speed.
-    uint32_t Tmc2209::computeTcoolthrs(int32_t speedSps, uint16_t microsteps) {
+    uint32_t Tmc2209::computeTcoolthrs(int32_t speedSps, uint16_t microsteps)
+    {
         if (speedSps <= 0) {
             return 0;
         }
-        float tstep = (TMC_FCLK * static_cast<float>(microsteps)) /
-                      (static_cast<float>(speedSps) * TMC_INTERNAL_USTEPS);
+        float tstep =
+            (TMC_FCLK * static_cast<float>(microsteps)) / (static_cast<float>(speedSps) * TMC_INTERNAL_USTEPS);
         return static_cast<uint32_t>(tstep * TCOOLTHRS_MARGIN);
     }
 
     //
     // Helpers
     //
-    uint8_t Tmc2209::mresFromMicrosteps(uint16_t microsteps) {
+    uint8_t Tmc2209::mresFromMicrosteps(uint16_t microsteps)
+    {
         switch (microsteps) {
-            case 256:
-                return 0;
-            case 128:
-                return 1;
-            case 64:
-                return 2;
-            case 32:
-                return 3;
-            case 16:
-                return 4;
-            case 8:
-                return 5;
-            case 4:
-                return 6;
-            case 2:
-                return 7;
-            case 1:
-                return 8;
-            default:
-                return 4;  // 16 microsteps
+        case 256:
+            return 0;
+        case 128:
+            return 1;
+        case 64:
+            return 2;
+        case 32:
+            return 3;
+        case 16:
+            return 4;
+        case 8:
+            return 5;
+        case 4:
+            return 6;
+        case 2:
+            return 7;
+        case 1:
+            return 8;
+        default:
+            return 4; // 16 microsteps
         }
     }
 
-}  // namespace ungula::motor::tmc
+} // namespace ungula::motor::tmc

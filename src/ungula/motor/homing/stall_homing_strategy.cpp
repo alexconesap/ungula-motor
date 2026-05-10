@@ -6,25 +6,33 @@
 
 #include "i_homeable_motor.h"
 
-namespace ungula::motor::homing {
+namespace ungula::motor::homing
+{
 
-    namespace {
+    namespace
+    {
 
         // Sign used for a moveBy delta. Forward is positive, backward negative —
         // matches the convention in LocalMotor::moveBy.
-        int32_t signForDirection(Direction dir) {
+        int32_t signForDirection(Direction dir)
+        {
             return (dir == Direction::FORWARD) ? 1 : -1;
         }
 
-        Direction oppositeOf(Direction dir) {
+        Direction oppositeOf(Direction dir)
+        {
             return (dir == Direction::FORWARD) ? Direction::BACKWARD : Direction::FORWARD;
         }
 
-    }  // namespace
+    } // namespace
 
-    StallHomingStrategy::StallHomingStrategy(const Config& cfg) : cfg_(cfg) {}
+    StallHomingStrategy::StallHomingStrategy(const Config &cfg)
+            : cfg_(cfg)
+    {
+    }
 
-    void StallHomingStrategy::begin(IHomeableMotor& motor) {
+    void StallHomingStrategy::begin(IHomeableMotor &motor)
+    {
         phase_ = Phase::FastApproach;
         succeeded_ = false;
 
@@ -40,63 +48,65 @@ namespace ungula::motor::homing {
         startApproach(motor, cfg_.fastSpeedSps, cfg_.fastAccelMs);
     }
 
-    bool StallHomingStrategy::tick(IHomeableMotor& motor) {
+    bool StallHomingStrategy::tick(IHomeableMotor &motor)
+    {
         const MotorFsmState fsmState = motor.state();
 
         switch (phase_) {
-            case Phase::FastApproach:
-                if (fsmState == MotorFsmState::Stall) {
-                    // clearStall() brings FSM back to Idle so the next move is accepted.
-                    motor.clearStall();
-                    if (cfg_.finalApproach) {
-                        startBackoff(motor);
-                        phase_ = Phase::Backoff;
-                    } else {
-                        // Single-stall mode: first touch is good enough.
-                        phase_ = Phase::Done;
-                        succeeded_ = true;
-                        return true;
-                    }
-                } else if (fsmState == MotorFsmState::Fault) {
-                    phase_ = Phase::Done;
-                    return true;
-                }
-                return false;
-
-            case Phase::Backoff:
-                // LocalMotor sits in TargetReached once the relative move lands. FSM
-                // will not accept a new command until we push it back to Idle —
-                // emergencyStop is the cheap way since the motor is already parked.
-                if (fsmState == MotorFsmState::TargetReached) {
-                    motor.emergencyStop();
-                    startApproach(motor, cfg_.slowSpeedSps, cfg_.slowAccelMs);
-                    phase_ = Phase::SlowApproach;
-                } else if (fsmState == MotorFsmState::Fault) {
-                    phase_ = Phase::Done;
-                    return true;
-                }
-                return false;
-
-            case Phase::SlowApproach:
-                if (fsmState == MotorFsmState::Stall) {
-                    motor.clearStall();
+        case Phase::FastApproach:
+            if (fsmState == MotorFsmState::Stall) {
+                // clearStall() brings FSM back to Idle so the next move is accepted.
+                motor.clearStall();
+                if (cfg_.finalApproach) {
+                    startBackoff(motor);
+                    phase_ = Phase::Backoff;
+                } else {
+                    // Single-stall mode: first touch is good enough.
                     phase_ = Phase::Done;
                     succeeded_ = true;
                     return true;
                 }
-                if (fsmState == MotorFsmState::Fault) {
-                    phase_ = Phase::Done;
-                    return true;
-                }
-                return false;
-
-            case Phase::Done:
+            } else if (fsmState == MotorFsmState::Fault) {
+                phase_ = Phase::Done;
                 return true;
+            }
+            return false;
+
+        case Phase::Backoff:
+            // LocalMotor sits in TargetReached once the relative move lands. FSM
+            // will not accept a new command until we push it back to Idle —
+            // emergencyStop is the cheap way since the motor is already parked.
+            if (fsmState == MotorFsmState::TargetReached) {
+                motor.emergencyStop();
+                startApproach(motor, cfg_.slowSpeedSps, cfg_.slowAccelMs);
+                phase_ = Phase::SlowApproach;
+            } else if (fsmState == MotorFsmState::Fault) {
+                phase_ = Phase::Done;
+                return true;
+            }
+            return false;
+
+        case Phase::SlowApproach:
+            if (fsmState == MotorFsmState::Stall) {
+                motor.clearStall();
+                phase_ = Phase::Done;
+                succeeded_ = true;
+                return true;
+            }
+            if (fsmState == MotorFsmState::Fault) {
+                phase_ = Phase::Done;
+                return true;
+            }
+            return false;
+
+        case Phase::Done:
+            return true;
         }
         return true;
     }
 
-    void StallHomingStrategy::finish(IHomeableMotor& motor, bool succeeded) {
+    void StallHomingStrategy::finish(IHomeableMotor &motor, bool succeeded)
+    {
         // Make sure no residual motion carries on after we hand control back.
         if (motor.isMoving()) {
             motor.emergencyStop();
@@ -111,8 +121,8 @@ namespace ungula::motor::homing {
         }
     }
 
-    void StallHomingStrategy::startApproach(IHomeableMotor& motor, int32_t speedSps,
-                                            uint32_t accelMs) {
+    void StallHomingStrategy::startApproach(IHomeableMotor &motor, int32_t speedSps, uint32_t accelMs)
+    {
         motor.setProfileSpeed(MotionProfile::HOMING, speedSps);
         motor.setProfileAccel(MotionProfile::HOMING, accelMs);
         motor.setProfileDecel(MotionProfile::HOMING, accelMs);
@@ -125,7 +135,8 @@ namespace ungula::motor::homing {
         }
     }
 
-    void StallHomingStrategy::startBackoff(IHomeableMotor& motor) {
+    void StallHomingStrategy::startBackoff(IHomeableMotor &motor)
+    {
         const Direction away = oppositeOf(cfg_.homingDirection);
         const int32_t deltaSteps = signForDirection(away) * cfg_.backoffSteps;
 
@@ -136,4 +147,4 @@ namespace ungula::motor::homing {
         motor.moveBy(static_cast<float>(deltaSteps), DistanceUnit::STEPS);
     }
 
-}  // namespace ungula::motor::homing
+} // namespace ungula::motor::homing

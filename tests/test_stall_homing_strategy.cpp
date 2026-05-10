@@ -8,7 +8,8 @@
 
 #include "mock_homeable_motor.h"
 
-namespace {
+namespace
+{
 
     using ungula::motor::Direction;
     using ungula::motor::MotionProfile;
@@ -16,7 +17,8 @@ namespace {
     using ungula::motor::homing::StallHomingStrategy;
     using ungula::motor::test::MockHomeableMotor;
 
-    StallHomingStrategy::Config makeConfig(bool finalApproach = true) {
+    StallHomingStrategy::Config makeConfig(bool finalApproach = true)
+    {
         StallHomingStrategy::Config cfg;
         cfg.homingDirection = Direction::BACKWARD;
         cfg.fastSpeedSps = 2000;
@@ -28,7 +30,8 @@ namespace {
         return cfg;
     }
 
-    TEST(StallHomingStrategyTest, BeginEnforcesAutoStopAndClearsFaults) {
+    TEST(StallHomingStrategyTest, BeginEnforcesAutoStopAndClearsFaults)
+    {
         MockHomeableMotor mock;
         StallHomingStrategy strategy(makeConfig());
 
@@ -43,7 +46,8 @@ namespace {
         EXPECT_FALSE(strategy.succeeded());
     }
 
-    TEST(StallHomingStrategyTest, FullSequenceCompletesWithFinalApproach) {
+    TEST(StallHomingStrategyTest, FullSequenceCompletesWithFinalApproach)
+    {
         MockHomeableMotor mock;
         StallHomingStrategy strategy(makeConfig(true));
 
@@ -76,7 +80,8 @@ namespace {
         EXPECT_TRUE(strategy.succeeded());
     }
 
-    TEST(StallHomingStrategyTest, SingleStallModeSkipsBackoff) {
+    TEST(StallHomingStrategyTest, SingleStallModeSkipsBackoff)
+    {
         MockHomeableMotor mock;
         StallHomingStrategy strategy(makeConfig(false));
 
@@ -91,7 +96,8 @@ namespace {
         EXPECT_EQ(mock.moveBackwardCount, 1);
     }
 
-    TEST(StallHomingStrategyTest, FaultDuringFastApproachFailsCleanly) {
+    TEST(StallHomingStrategyTest, FaultDuringFastApproachFailsCleanly)
+    {
         MockHomeableMotor mock;
         StallHomingStrategy strategy(makeConfig());
 
@@ -101,7 +107,8 @@ namespace {
         EXPECT_FALSE(strategy.succeeded());
     }
 
-    TEST(StallHomingStrategyTest, FinishResetsPositionOnlyOnSuccess) {
+    TEST(StallHomingStrategyTest, FinishResetsPositionOnlyOnSuccess)
+    {
         MockHomeableMotor mock;
         StallHomingStrategy strategy(makeConfig(false));
 
@@ -116,7 +123,8 @@ namespace {
         EXPECT_EQ(mock2.resetPositionCount, 0);
     }
 
-    TEST(StallHomingStrategyTest, ForwardHomingIssuesMoveForward) {
+    TEST(StallHomingStrategyTest, ForwardHomingIssuesMoveForward)
+    {
         auto cfg = makeConfig();
         cfg.homingDirection = Direction::FORWARD;
         MockHomeableMotor mock;
@@ -127,7 +135,8 @@ namespace {
         EXPECT_EQ(mock.moveBackwardCount, 0);
     }
 
-    TEST(StallHomingStrategyTest, WritesHomingProfileBeforeEveryMove) {
+    TEST(StallHomingStrategyTest, WritesHomingProfileBeforeEveryMove)
+    {
         MockHomeableMotor mock;
         StallHomingStrategy strategy(makeConfig(false));
 
@@ -143,13 +152,14 @@ namespace {
     // rest — the driver is "not stalling" whether the axis is on the stop or
     // not. Must always report false so LocalMotor::begin() won't wrongly seed
     // isHomed across a reboot.
-    TEST(StallHomingStrategyTest, IsAtHomeReferenceAlwaysFalse) {
+    TEST(StallHomingStrategyTest, IsAtHomeReferenceAlwaysFalse)
+    {
         MockHomeableMotor mock;
         StallHomingStrategy strategy(makeConfig());
 
-        mock.scriptedLimitBackward = true;  // irrelevant for stall homing.
+        mock.scriptedLimitBackward = true; // irrelevant for stall homing.
         mock.scriptedLimitForward = true;
         EXPECT_FALSE(strategy.isAtHomeReference(mock));
     }
 
-}  // namespace
+} // namespace

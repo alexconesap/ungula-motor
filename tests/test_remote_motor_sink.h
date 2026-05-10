@@ -14,41 +14,44 @@
 
 #include <vector>
 
-namespace test_helpers {
+namespace test_helpers
+{
 
     struct RecordingSink final : public ungula::motor::IMotorCommandSink {
-            struct SimpleSent {
-                    uint8_t id;
-                    ungula::motor::MotorCommandType cmd;
-            };
-            struct MoveSent {
-                    uint8_t id;
-                    ungula::motor::MotorCommandType cmd;
-                    ungula::motor::MotorMoveParams params;
-            };
-            struct ProfileSent {
-                    uint8_t id;
-                    ungula::motor::MotionProfileSpec profile;
-            };
+        struct SimpleSent {
+            uint8_t id;
+            ungula::motor::MotorCommandType cmd;
+        };
+        struct MoveSent {
+            uint8_t id;
+            ungula::motor::MotorCommandType cmd;
+            ungula::motor::MotorMoveParams params;
+        };
+        struct ProfileSent {
+            uint8_t id;
+            ungula::motor::MotionProfileSpec profile;
+        };
 
-            std::vector<SimpleSent> simples;
-            std::vector<MoveSent> moves;
-            std::vector<ProfileSent> profiles;
+        std::vector<SimpleSent> simples;
+        std::vector<MoveSent> moves;
+        std::vector<ProfileSent> profiles;
 
-            bool send(uint8_t motorId, ungula::motor::MotorCommandType command) override {
-                simples.push_back({motorId, command});
-                return true;
-            }
-            bool sendMove(uint8_t motorId, ungula::motor::MotorCommandType command,
-                          const ungula::motor::MotorMoveParams& params) override {
-                moves.push_back({motorId, command, params});
-                return true;
-            }
-            bool sendProfile(uint8_t motorId,
-                             const ungula::motor::MotionProfileSpec& profile) override {
-                profiles.push_back({motorId, profile});
-                return true;
-            }
+        bool send(uint8_t motorId, ungula::motor::MotorCommandType command) override
+        {
+            simples.push_back({ motorId, command });
+            return true;
+        }
+        bool sendMove(uint8_t motorId, ungula::motor::MotorCommandType command,
+                      const ungula::motor::MotorMoveParams &params) override
+        {
+            moves.push_back({ motorId, command, params });
+            return true;
+        }
+        bool sendProfile(uint8_t motorId, const ungula::motor::MotionProfileSpec &profile) override
+        {
+            profiles.push_back({ motorId, profile });
+            return true;
+        }
     };
 
-}  // namespace test_helpers
+} // namespace test_helpers

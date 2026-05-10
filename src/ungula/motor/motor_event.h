@@ -9,7 +9,8 @@
 
 /// @brief Typed motor event model — POD struct, no heap, transport-ready.
 
-namespace ungula::motor {
+namespace ungula::motor
+{
 
     /// @brief Motor event types.
     enum class MotorEventType : uint8_t {
@@ -24,13 +25,13 @@ namespace ungula::motor {
 
     /// @brief Motor event payload — fixed-size, suitable for local and future remote use.
     struct MotorEvent {
-            MotorEventType type;
-            MotorFsmState previousState;
-            MotorFsmState newState;
-            int32_t positionSteps;
-            int64_t timestampMs;  /// Stamped with core::time::syncNow() at creation
-                                  /// time. Signed 64-bit to match the rest of the
-                                  /// time API (core::time::tick_ms_t) — no narrowing.
+        MotorEventType type;
+        MotorFsmState previousState;
+        MotorFsmState newState;
+        int32_t positionSteps;
+        int64_t timestampMs; /// Stamped with core::time::syncNow() at creation
+        /// time. Signed 64-bit to match the rest of the
+        /// time API (core::time::tick_ms_t) — no narrowing.
     };
 
-}  // namespace ungula::motor
+} // namespace ungula::motor

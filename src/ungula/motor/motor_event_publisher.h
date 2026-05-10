@@ -11,56 +11,60 @@
 ///
 /// No heap allocation. Capacity fixed at compile time via template parameter.
 
-namespace ungula::motor {
+namespace ungula::motor
+{
 
-    template <uint8_t MaxListeners>
-    class MotorEventPublisher {
-        public:
-            /// @brief Register a listener. Returns false if full.
-            bool subscribe(IMotorEventListener* listener) {
-                if (listener == nullptr || count_ >= MaxListeners) {
-                    return false;
-                }
-                for (uint8_t idx = 0; idx < count_; idx++) {
-                    if (listeners_[idx] == listener) {
-                        return true;  // already registered
-                    }
-                }
-                listeners_[count_] = listener;
-                count_++;
-                return true;
-            }
-
-            /// @brief Remove a listener.
-            bool unsubscribe(IMotorEventListener* listener) {
-                for (uint8_t idx = 0; idx < count_; idx++) {
-                    if (listeners_[idx] == listener) {
-                        // Shift remaining listeners down
-                        for (uint8_t jdx = idx; jdx < count_ - 1; jdx++) {
-                            listeners_[jdx] = listeners_[jdx + 1];
-                        }
-                        count_--;
-                        listeners_[count_] = nullptr;
-                        return true;
-                    }
-                }
+    template <uint8_t MaxListeners> class MotorEventPublisher {
+    public:
+        /// @brief Register a listener. Returns false if full.
+        bool subscribe(IMotorEventListener *listener)
+        {
+            if (listener == nullptr || count_ >= MaxListeners) {
                 return false;
             }
-
-            /// @brief Publish an event to all registered listeners.
-            void publish(const MotorEvent& event) {
-                for (uint8_t idx = 0; idx < count_; idx++) {
-                    listeners_[idx]->onMotorEvent(event);
+            for (uint8_t idx = 0; idx < count_; idx++) {
+                if (listeners_[idx] == listener) {
+                    return true; // already registered
                 }
             }
+            listeners_[count_] = listener;
+            count_++;
+            return true;
+        }
 
-            uint8_t listenerCount() const {
-                return count_;
+        /// @brief Remove a listener.
+        bool unsubscribe(IMotorEventListener *listener)
+        {
+            for (uint8_t idx = 0; idx < count_; idx++) {
+                if (listeners_[idx] == listener) {
+                    // Shift remaining listeners down
+                    for (uint8_t jdx = idx; jdx < count_ - 1; jdx++) {
+                        listeners_[jdx] = listeners_[jdx + 1];
+                    }
+                    count_--;
+                    listeners_[count_] = nullptr;
+                    return true;
+                }
             }
+            return false;
+        }
 
-        private:
-            IMotorEventListener* listeners_[MaxListeners] = {};
-            uint8_t count_ = 0;
+        /// @brief Publish an event to all registered listeners.
+        void publish(const MotorEvent &event)
+        {
+            for (uint8_t idx = 0; idx < count_; idx++) {
+                listeners_[idx]->onMotorEvent(event);
+            }
+        }
+
+        uint8_t listenerCount() const
+        {
+            return count_;
+        }
+
+    private:
+        IMotorEventListener *listeners_[MaxListeners] = {};
+        uint8_t count_ = 0;
     };
 
-}  // namespace ungula::motor
+} // namespace ungula::motor

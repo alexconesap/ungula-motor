@@ -8,14 +8,15 @@
 
 /// @brief Interface for consuming motor events.
 
-namespace ungula::motor {
+namespace ungula::motor
+{
 
     class IMotorEventListener {
-        public:
-            virtual ~IMotorEventListener() = default;
+    public:
+        virtual ~IMotorEventListener() = default;
 
-            /// @brief Called when a motor emits an event.
-            virtual void onMotorEvent(const MotorEvent& event) = 0;
+        /// @brief Called when a motor emits an event.
+        virtual void onMotorEvent(const MotorEvent &event) = 0;
     };
 
-}  // namespace ungula::motor
+} // namespace ungula::motor

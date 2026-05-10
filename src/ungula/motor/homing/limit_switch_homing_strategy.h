@@ -9,7 +9,8 @@
 #include "../motor_types.h"
 #include "i_homing_strategy.h"
 
-namespace ungula::motor::homing {
+namespace ungula::motor::homing
+{
 
     /// @brief Home against a limit switch (mechanical, optical, hall…).
     ///
@@ -31,45 +32,46 @@ namespace ungula::motor::homing {
     /// This strategy never reads the switch GPIO itself — LocalMotor owns the
     /// debounce and polarity logic. The strategy just watches the FSM.
     class LimitSwitchHomingStrategy : public IHomingStrategy {
-        public:
-            struct Config {
-                    Direction homingDirection = Direction::BACKWARD;
-                    int32_t fastSpeedSps = 2000;
-                    uint32_t fastAccelMs = 200U;
-                    int32_t slowSpeedSps = 500;
-                    uint32_t slowAccelMs = 100U;
-                    int32_t backoffSteps = 200;
-                    bool finalApproach = true;
-            };
+    public:
+        struct Config {
+            Direction homingDirection = Direction::BACKWARD;
+            int32_t fastSpeedSps = 2000;
+            uint32_t fastAccelMs = 200U;
+            int32_t slowSpeedSps = 500;
+            uint32_t slowAccelMs = 100U;
+            int32_t backoffSteps = 200;
+            bool finalApproach = true;
+        };
 
-            explicit LimitSwitchHomingStrategy(const Config& cfg);
+        explicit LimitSwitchHomingStrategy(const Config &cfg);
 
-            void begin(IHomeableMotor& motor) override;
-            bool tick(IHomeableMotor& motor) override;
-            void finish(IHomeableMotor& motor, bool succeeded) override;
+        void begin(IHomeableMotor &motor) override;
+        bool tick(IHomeableMotor &motor) override;
+        void finish(IHomeableMotor &motor, bool succeeded) override;
 
-            bool succeeded() const override {
-                return succeeded_;
-            }
+        bool succeeded() const override
+        {
+            return succeeded_;
+        }
 
-            /// @brief A limit-switch strategy can answer "am I at home?"
-            /// just by reading the pin — no motion needed.
-            bool isAtHomeReference(const IHomeableMotor& motor) const override;
+        /// @brief A limit-switch strategy can answer "am I at home?"
+        /// just by reading the pin — no motion needed.
+        bool isAtHomeReference(const IHomeableMotor &motor) const override;
 
-        private:
-            enum class Phase : uint8_t {
-                FastApproach,  // drive into the switch at full speed.
-                Backoff,       // step off the switch.
-                SlowApproach,  // repeatable final hit.
-                Done
-            };
+    private:
+        enum class Phase : uint8_t {
+            FastApproach, // drive into the switch at full speed.
+            Backoff, // step off the switch.
+            SlowApproach, // repeatable final hit.
+            Done
+        };
 
-            void startApproach(IHomeableMotor& motor, int32_t speedSps, uint32_t accelMs);
-            void startBackoff(IHomeableMotor& motor);
+        void startApproach(IHomeableMotor &motor, int32_t speedSps, uint32_t accelMs);
+        void startBackoff(IHomeableMotor &motor);
 
-            Config cfg_;
-            Phase phase_ = Phase::FastApproach;
-            bool succeeded_ = false;
+        Config cfg_;
+        Phase phase_ = Phase::FastApproach;
+        bool succeeded_ = false;
     };
 
-}  // namespace ungula::motor::homing
+} // namespace ungula::motor::homing

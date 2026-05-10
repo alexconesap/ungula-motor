@@ -10,7 +10,8 @@
 #include <ungula/motor/motor_event.h>
 #include <ungula/motor/motor_event_publisher.h>
 
-namespace {
+namespace
+{
 
     using ungula::motor::MotorEvent;
     using ungula::motor::MotorEventPublisher;
@@ -18,16 +19,18 @@ namespace {
     using ungula::motor::MotorFsmState;
 
     class CountingListener : public ungula::motor::IMotorEventListener {
-        public:
-            int hits = 0;
-            MotorEvent last{};
-            void onMotorEvent(const MotorEvent& event) override {
-                ++hits;
-                last = event;
-            }
+    public:
+        int hits = 0;
+        MotorEvent last{};
+        void onMotorEvent(const MotorEvent &event) override
+        {
+            ++hits;
+            last = event;
+        }
     };
 
-    MotorEvent make_event(MotorEventType type, int32_t pos) {
+    MotorEvent make_event(MotorEventType type, int32_t pos)
+    {
         MotorEvent e{};
         e.type = type;
         e.previousState = MotorFsmState::Idle;
@@ -37,14 +40,16 @@ namespace {
         return e;
     }
 
-    TEST(MotorEventPublisherTest, EmptyPublishIsNoOp) {
+    TEST(MotorEventPublisherTest, EmptyPublishIsNoOp)
+    {
         MotorEventPublisher<4> pub;
         EXPECT_EQ(pub.listenerCount(), 0);
         pub.publish(make_event(MotorEventType::Started, 0));
         // No listeners → no observable side effect.
     }
 
-    TEST(MotorEventPublisherTest, SubscribeAddsAndDeduplicates) {
+    TEST(MotorEventPublisherTest, SubscribeAddsAndDeduplicates)
+    {
         MotorEventPublisher<4> pub;
         CountingListener a;
         CountingListener b;
@@ -58,22 +63,25 @@ namespace {
         EXPECT_EQ(pub.listenerCount(), 2);
     }
 
-    TEST(MotorEventPublisherTest, SubscribeRejectsNullptr) {
+    TEST(MotorEventPublisherTest, SubscribeRejectsNullptr)
+    {
         MotorEventPublisher<4> pub;
         EXPECT_FALSE(pub.subscribe(nullptr));
         EXPECT_EQ(pub.listenerCount(), 0);
     }
 
-    TEST(MotorEventPublisherTest, SubscribeRejectsWhenFull) {
+    TEST(MotorEventPublisherTest, SubscribeRejectsWhenFull)
+    {
         MotorEventPublisher<2> pub;
         CountingListener a, b, c;
         EXPECT_TRUE(pub.subscribe(&a));
         EXPECT_TRUE(pub.subscribe(&b));
-        EXPECT_FALSE(pub.subscribe(&c));  // capacity hit
+        EXPECT_FALSE(pub.subscribe(&c)); // capacity hit
         EXPECT_EQ(pub.listenerCount(), 2);
     }
 
-    TEST(MotorEventPublisherTest, PublishReachesEverySubscriber) {
+    TEST(MotorEventPublisherTest, PublishReachesEverySubscriber)
+    {
         MotorEventPublisher<4> pub;
         CountingListener a, b, c;
         pub.subscribe(&a);
@@ -88,7 +96,8 @@ namespace {
         EXPECT_EQ(b.last.type, MotorEventType::TargetReached);
     }
 
-    TEST(MotorEventPublisherTest, UnsubscribeRemovesAndShifts) {
+    TEST(MotorEventPublisherTest, UnsubscribeRemovesAndShifts)
+    {
         MotorEventPublisher<4> pub;
         CountingListener a, b, c;
         pub.subscribe(&a);
@@ -101,20 +110,22 @@ namespace {
 
         pub.publish(make_event(MotorEventType::Stopped, 0));
         EXPECT_EQ(a.hits, 1);
-        EXPECT_EQ(b.hits, 0);  // unsubscribed
+        EXPECT_EQ(b.hits, 0); // unsubscribed
         EXPECT_EQ(c.hits, 1);
     }
 
-    TEST(MotorEventPublisherTest, UnsubscribeUnknownIsFalse) {
+    TEST(MotorEventPublisherTest, UnsubscribeUnknownIsFalse)
+    {
         MotorEventPublisher<4> pub;
         CountingListener a;
-        EXPECT_FALSE(pub.unsubscribe(&a));  // not registered yet
+        EXPECT_FALSE(pub.unsubscribe(&a)); // not registered yet
         pub.subscribe(&a);
         EXPECT_TRUE(pub.unsubscribe(&a));
-        EXPECT_FALSE(pub.unsubscribe(&a));  // already gone
+        EXPECT_FALSE(pub.unsubscribe(&a)); // already gone
     }
 
-    TEST(MotorEventPublisherTest, ResubscribeAfterUnsubscribeWorks) {
+    TEST(MotorEventPublisherTest, ResubscribeAfterUnsubscribeWorks)
+    {
         MotorEventPublisher<4> pub;
         CountingListener a;
         pub.subscribe(&a);
@@ -127,7 +138,8 @@ namespace {
         EXPECT_EQ(a.hits, 1);
     }
 
-    TEST(MotorEventPublisherTest, MultiplePublishesAccumulate) {
+    TEST(MotorEventPublisherTest, MultiplePublishesAccumulate)
+    {
         MotorEventPublisher<2> pub;
         CountingListener a;
         pub.subscribe(&a);
@@ -139,4 +151,4 @@ namespace {
         EXPECT_EQ(a.last.positionSteps, 6);
     }
 
-}  // namespace
+} // namespace

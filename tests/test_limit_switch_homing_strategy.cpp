@@ -8,7 +8,8 @@
 
 #include "mock_homeable_motor.h"
 
-namespace {
+namespace
+{
 
     using ungula::motor::Direction;
     using ungula::motor::MotionProfile;
@@ -16,7 +17,8 @@ namespace {
     using ungula::motor::homing::LimitSwitchHomingStrategy;
     using ungula::motor::test::MockHomeableMotor;
 
-    LimitSwitchHomingStrategy::Config makeConfig(bool finalApproach = true) {
+    LimitSwitchHomingStrategy::Config makeConfig(bool finalApproach = true)
+    {
         LimitSwitchHomingStrategy::Config cfg;
         cfg.homingDirection = Direction::BACKWARD;
         cfg.fastSpeedSps = 3000;
@@ -28,7 +30,8 @@ namespace {
         return cfg;
     }
 
-    TEST(LimitSwitchHomingStrategyTest, BeginClearsFaultsAndStartsFastApproach) {
+    TEST(LimitSwitchHomingStrategyTest, BeginClearsFaultsAndStartsFastApproach)
+    {
         MockHomeableMotor mock;
         LimitSwitchHomingStrategy strategy(makeConfig());
 
@@ -40,7 +43,8 @@ namespace {
         EXPECT_FALSE(strategy.succeeded());
     }
 
-    TEST(LimitSwitchHomingStrategyTest, FullSequenceCompletesWithFinalApproach) {
+    TEST(LimitSwitchHomingStrategyTest, FullSequenceCompletesWithFinalApproach)
+    {
         MockHomeableMotor mock;
         LimitSwitchHomingStrategy strategy(makeConfig(true));
 
@@ -53,7 +57,7 @@ namespace {
         EXPECT_FALSE(strategy.tick(mock));
         EXPECT_GT(mock.emergencyStopCount, eStopsBefore);
         ASSERT_FALSE(mock.moveByCalls.empty());
-        EXPECT_GT(mock.moveByCalls.back(), 0.0F);  // backoff is opposite sign.
+        EXPECT_GT(mock.moveByCalls.back(), 0.0F); // backoff is opposite sign.
 
         // Backoff finishes: TargetReached → slow re-approach.
         mock.scriptedState = MotorFsmState::TargetReached;
@@ -66,7 +70,8 @@ namespace {
         EXPECT_TRUE(strategy.succeeded());
     }
 
-    TEST(LimitSwitchHomingStrategyTest, SingleHitModeSkipsBackoff) {
+    TEST(LimitSwitchHomingStrategyTest, SingleHitModeSkipsBackoff)
+    {
         MockHomeableMotor mock;
         LimitSwitchHomingStrategy strategy(makeConfig(false));
 
@@ -77,13 +82,14 @@ namespace {
         EXPECT_TRUE(mock.moveByCalls.empty());
     }
 
-    TEST(LimitSwitchHomingStrategyTest, BackoffThatFailsToClearSwitchFails) {
+    TEST(LimitSwitchHomingStrategyTest, BackoffThatFailsToClearSwitchFails)
+    {
         MockHomeableMotor mock;
         LimitSwitchHomingStrategy strategy(makeConfig(true));
 
         strategy.begin(mock);
         mock.scriptedState = MotorFsmState::LimitReached;
-        EXPECT_FALSE(strategy.tick(mock));  // enters Backoff phase.
+        EXPECT_FALSE(strategy.tick(mock)); // enters Backoff phase.
 
         // Backoff too small — still on the switch when backoff completes.
         mock.scriptedState = MotorFsmState::LimitReached;
@@ -91,7 +97,8 @@ namespace {
         EXPECT_FALSE(strategy.succeeded());
     }
 
-    TEST(LimitSwitchHomingStrategyTest, FaultDuringFastApproachFailsCleanly) {
+    TEST(LimitSwitchHomingStrategyTest, FaultDuringFastApproachFailsCleanly)
+    {
         MockHomeableMotor mock;
         LimitSwitchHomingStrategy strategy(makeConfig());
 
@@ -101,7 +108,8 @@ namespace {
         EXPECT_FALSE(strategy.succeeded());
     }
 
-    TEST(LimitSwitchHomingStrategyTest, FinishResetsPositionOnlyOnSuccess) {
+    TEST(LimitSwitchHomingStrategyTest, FinishResetsPositionOnlyOnSuccess)
+    {
         MockHomeableMotor mock;
         LimitSwitchHomingStrategy strategy(makeConfig(false));
 
@@ -110,7 +118,8 @@ namespace {
         EXPECT_EQ(mock.resetPositionCount, 1);
     }
 
-    TEST(LimitSwitchHomingStrategyTest, DoesNotForceAutoStopOnStall) {
+    TEST(LimitSwitchHomingStrategyTest, DoesNotForceAutoStopOnStall)
+    {
         MockHomeableMotor mock;
         LimitSwitchHomingStrategy strategy(makeConfig());
 
@@ -122,16 +131,17 @@ namespace {
     // Boot-time seed: LocalMotor::begin() asks the strategy whether the axis
     // is already sitting on the home reference. For limit-switch homing this
     // is the configured direction's limit pin.
-    TEST(LimitSwitchHomingStrategyTest, IsAtHomeReferenceFollowsLimitInHomingDirection) {
+    TEST(LimitSwitchHomingStrategyTest, IsAtHomeReferenceFollowsLimitInHomingDirection)
+    {
         MockHomeableMotor mock;
-        LimitSwitchHomingStrategy strategy(makeConfig());  // homingDirection = BACKWARD
+        LimitSwitchHomingStrategy strategy(makeConfig()); // homingDirection = BACKWARD
 
         mock.scriptedLimitBackward = false;
-        mock.scriptedLimitForward = true;  // the OTHER end — must not count.
+        mock.scriptedLimitForward = true; // the OTHER end — must not count.
         EXPECT_FALSE(strategy.isAtHomeReference(mock));
 
         mock.scriptedLimitBackward = true;
         EXPECT_TRUE(strategy.isAtHomeReference(mock));
     }
 
-}  // namespace
+} // namespace

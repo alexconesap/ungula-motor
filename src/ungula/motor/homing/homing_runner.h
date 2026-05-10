@@ -6,7 +6,8 @@
 
 #include <cstdint>
 
-namespace ungula::motor::homing {
+namespace ungula::motor::homing
+{
 
     class IHomeableMotor;
     class IHomingStrategy;
@@ -32,40 +33,42 @@ namespace ungula::motor::homing {
     /// A timeout of 0 disables the wall-clock limit — the strategy decides
     /// when to give up.
     class HomingRunner {
-        public:
-            HomingRunner(IHomeableMotor& motor, IHomingStrategy& strategy, uint32_t timeoutMs = 0U);
+    public:
+        HomingRunner(IHomeableMotor &motor, IHomingStrategy &strategy, uint32_t timeoutMs = 0U);
 
-            /// @brief Kick off the homing sequence. Safe to call only from Idle.
-            /// Calls strategy.begin() internally.
-            void start();
+        /// @brief Kick off the homing sequence. Safe to call only from Idle.
+        /// Calls strategy.begin() internally.
+        void start();
 
-            /// @brief Poll the strategy. Returns true when the runner has stopped
-            /// (success, failure or abort). Cheap to call from a loop.
-            bool step();
+        /// @brief Poll the strategy. Returns true when the runner has stopped
+        /// (success, failure or abort). Cheap to call from a loop.
+        bool step();
 
-            /// @brief Abort an in-progress homing. Calls strategy.finish(motor, false).
-            /// Safe to call at any time.
-            void abort();
+        /// @brief Abort an in-progress homing. Calls strategy.finish(motor, false).
+        /// Safe to call at any time.
+        void abort();
 
-            bool isRunning() const {
-                return state_ == State::Running;
-            }
+        bool isRunning() const
+        {
+            return state_ == State::Running;
+        }
 
-            bool succeeded() const {
-                return state_ == State::DoneSuccess;
-            }
+        bool succeeded() const
+        {
+            return state_ == State::DoneSuccess;
+        }
 
-            /// @brief Milliseconds elapsed since start() was called. Zero when idle.
-            uint32_t elapsedMs() const;
+        /// @brief Milliseconds elapsed since start() was called. Zero when idle.
+        uint32_t elapsedMs() const;
 
-        private:
-            enum class State : uint8_t { Idle, Running, DoneSuccess, DoneFail };
+    private:
+        enum class State : uint8_t { Idle, Running, DoneSuccess, DoneFail };
 
-            IHomeableMotor& motor_;
-            IHomingStrategy& strategy_;
-            uint32_t timeoutMs_;
-            uint32_t startMs_ = 0U;
-            State state_ = State::Idle;
+        IHomeableMotor &motor_;
+        IHomingStrategy &strategy_;
+        uint32_t timeoutMs_;
+        uint32_t startMs_ = 0U;
+        State state_ = State::Idle;
     };
 
-}  // namespace ungula::motor::homing
+} // namespace ungula::motor::homing

@@ -12,7 +12,8 @@
 
 #include "test_remote_motor_sink.h"
 
-namespace {
+namespace
+{
 
     using ungula::motor::MotorCommandType;
     using ungula::motor::MotorCoordinator;
@@ -25,26 +26,29 @@ namespace {
     // registered motors.
     using test_helpers::RecordingSink;
 
-    TEST(MotorCoordinatorTest, EmptyCoordinatorIsNoOp) {
+    TEST(MotorCoordinatorTest, EmptyCoordinatorIsNoOp)
+    {
         MotorCoordinator coord;
         EXPECT_EQ(coord.motorCount(), 0);
-        coord.enableAll();         // must not crash
-        coord.emergencyStopAll();  // must not crash
+        coord.enableAll(); // must not crash
+        coord.emergencyStopAll(); // must not crash
         EXPECT_EQ(coord.motor(0), nullptr);
     }
 
-    TEST(MotorCoordinatorTest, AddMotorRejectsNullptr) {
+    TEST(MotorCoordinatorTest, AddMotorRejectsNullptr)
+    {
         MotorCoordinator coord;
         EXPECT_FALSE(coord.addMotor(nullptr));
         EXPECT_EQ(coord.motorCount(), 0);
     }
 
-    TEST(MotorCoordinatorTest, AddMotorRespectsCapacity) {
+    TEST(MotorCoordinatorTest, AddMotorRespectsCapacity)
+    {
         MotorCoordinator coord;
         RecordingSink sink;
         ungula::motor::RemoteMotor motors[ungula::motor::MAX_COORDINATOR_MOTORS + 1] = {
-                {sink, 0}, {sink, 1}, {sink, 2}, {sink, 3}, {sink, 4},
-                {sink, 5}, {sink, 6}, {sink, 7}, {sink, 8},
+            { sink, 0 }, { sink, 1 }, { sink, 2 }, { sink, 3 }, { sink, 4 },
+            { sink, 5 }, { sink, 6 }, { sink, 7 }, { sink, 8 },
         };
         for (uint8_t i = 0; i < ungula::motor::MAX_COORDINATOR_MOTORS; ++i) {
             EXPECT_TRUE(coord.addMotor(&motors[i]));
@@ -55,7 +59,8 @@ namespace {
         EXPECT_EQ(coord.motorCount(), ungula::motor::MAX_COORDINATOR_MOTORS);
     }
 
-    TEST(MotorCoordinatorTest, EnableAllReachesEveryRegisteredMotor) {
+    TEST(MotorCoordinatorTest, EnableAllReachesEveryRegisteredMotor)
+    {
         MotorCoordinator coord;
         RecordingSink sink;
         ungula::motor::RemoteMotor m1(sink, /*id=*/10);
@@ -71,12 +76,13 @@ namespace {
         EXPECT_EQ(sink.simples[0].id, 10);
         EXPECT_EQ(sink.simples[1].id, 20);
         EXPECT_EQ(sink.simples[2].id, 30);
-        for (const auto& s : sink.simples) {
+        for (const auto &s : sink.simples) {
             EXPECT_EQ(s.cmd, MotorCommandType::ENABLE);
         }
     }
 
-    TEST(MotorCoordinatorTest, EmergencyStopAllReachesEveryRegisteredMotor) {
+    TEST(MotorCoordinatorTest, EmergencyStopAllReachesEveryRegisteredMotor)
+    {
         MotorCoordinator coord;
         RecordingSink sink;
         ungula::motor::RemoteMotor m1(sink, 1);
@@ -91,7 +97,8 @@ namespace {
         EXPECT_EQ(sink.simples[1].cmd, MotorCommandType::EMERGENCY_STOP);
     }
 
-    TEST(MotorCoordinatorTest, MotorIndexAccessor) {
+    TEST(MotorCoordinatorTest, MotorIndexAccessor)
+    {
         MotorCoordinator coord;
         RecordingSink sink;
         ungula::motor::RemoteMotor m1(sink, 1);
@@ -105,7 +112,8 @@ namespace {
         EXPECT_EQ(coord.motor(255), nullptr);
     }
 
-    TEST(MotorCoordinatorTest, OnMotorEventStoresLastEvent) {
+    TEST(MotorCoordinatorTest, OnMotorEventStoresLastEvent)
+    {
         // The coordinator implements IMotorEventListener — verify the
         // virtual dispatch hooks up correctly (it's worth testing at
         // least the recording behaviour even if the production
@@ -116,10 +124,10 @@ namespace {
         e.previousState = MotorFsmState::RunningForward;
         e.newState = MotorFsmState::TargetReached;
         e.positionSteps = 999;
-        e.timestampMs = 1'700'000'000'000LL;
+        e.timestampMs = 1 '700' 000 '000' 000LL;
 
         // Cast through the interface so we exercise the virtual dispatch.
-        ungula::motor::IMotorEventListener& asListener = coord;
+        ungula::motor::IMotorEventListener &asListener = coord;
         asListener.onMotorEvent(e);
         // No public getter — but the call mustn't crash and the
         // override must be reachable. (If a getter is added later, this
@@ -127,4 +135,4 @@ namespace {
         SUCCEED();
     }
 
-}  // namespace
+} // namespace

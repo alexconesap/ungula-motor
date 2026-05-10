@@ -4,73 +4,90 @@
 
 #include "remote_motor.h"
 
-namespace ungula::motor {
+namespace ungula::motor
+{
 
-    RemoteMotor::RemoteMotor(IMotorCommandSink& commandSink, uint8_t motorId)
-        : commandSink_(commandSink), motorId_(motorId) {}
+    RemoteMotor::RemoteMotor(IMotorCommandSink &commandSink, uint8_t motorId)
+            : commandSink_(commandSink)
+            , motorId_(motorId)
+    {
+    }
 
-    void RemoteMotor::enable() {
+    void RemoteMotor::enable()
+    {
         commandSink_.send(motorId_, MotorCommandType::ENABLE);
     }
 
-    void RemoteMotor::disable() {
+    void RemoteMotor::disable()
+    {
         commandSink_.send(motorId_, MotorCommandType::DISABLE);
     }
 
-    void RemoteMotor::moveForward() {
+    void RemoteMotor::moveForward()
+    {
         commandSink_.send(motorId_, MotorCommandType::MOVE_FORWARD);
     }
 
-    void RemoteMotor::moveBackward() {
+    void RemoteMotor::moveBackward()
+    {
         commandSink_.send(motorId_, MotorCommandType::MOVE_BACKWARD);
     }
 
-    void RemoteMotor::moveTo(float target, DistanceUnit unit) {
-        MotorMoveParams params{target, unit};
+    void RemoteMotor::moveTo(float target, DistanceUnit unit)
+    {
+        MotorMoveParams params{ target, unit };
         commandSink_.sendMove(motorId_, MotorCommandType::MOVE_TO, params);
     }
 
-    void RemoteMotor::moveBy(float delta, DistanceUnit unit) {
-        MotorMoveParams params{delta, unit};
+    void RemoteMotor::moveBy(float delta, DistanceUnit unit)
+    {
+        MotorMoveParams params{ delta, unit };
         commandSink_.sendMove(motorId_, MotorCommandType::MOVE_BY, params);
     }
 
-    void RemoteMotor::executeProfile(const MotionProfileSpec& profile) {
+    void RemoteMotor::executeProfile(const MotionProfileSpec &profile)
+    {
         commandSink_.sendProfile(motorId_, profile);
     }
 
-    void RemoteMotor::stop() {
+    void RemoteMotor::stop()
+    {
         commandSink_.send(motorId_, MotorCommandType::STOP);
     }
 
-    void RemoteMotor::emergencyStop() {
+    void RemoteMotor::emergencyStop()
+    {
         commandSink_.send(motorId_, MotorCommandType::EMERGENCY_STOP);
     }
 
-    MotorFsmState RemoteMotor::state() const {
+    MotorFsmState RemoteMotor::state() const
+    {
         return cachedState_;
     }
 
-    int32_t RemoteMotor::positionSteps() const {
+    int32_t RemoteMotor::positionSteps() const
+    {
         return cachedPosition_;
     }
 
-    bool RemoteMotor::isMoving() const {
+    bool RemoteMotor::isMoving() const
+    {
         switch (cachedState_) {
-            case MotorFsmState::WaitingStart:
-            case MotorFsmState::Starting:
-            case MotorFsmState::RunningForward:
-            case MotorFsmState::RunningBackward:
-            case MotorFsmState::Decelerating:
-                return true;
-            default:
-                return false;
+        case MotorFsmState::WaitingStart:
+        case MotorFsmState::Starting:
+        case MotorFsmState::RunningForward:
+        case MotorFsmState::RunningBackward:
+        case MotorFsmState::Decelerating:
+            return true;
+        default:
+            return false;
         }
     }
 
-    void RemoteMotor::updateState(MotorFsmState newState, int32_t position) {
+    void RemoteMotor::updateState(MotorFsmState newState, int32_t position)
+    {
         cachedState_ = newState;
         cachedPosition_ = position;
     }
 
-}  // namespace ungula::motor
+} // namespace ungula::motor

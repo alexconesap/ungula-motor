@@ -14,12 +14,14 @@
 
 #include <Arduino.h>
 
-void setup() {
+void setup()
+{
     Serial.begin(115200);
     Serial.println("UngulaDisplay demo ready (320x240)");
 }
 
-void loop() {
+void loop()
+{
     //
     delay(50);
 }

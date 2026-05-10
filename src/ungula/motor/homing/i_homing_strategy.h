@@ -4,7 +4,8 @@
 
 #pragma once
 
-namespace ungula::motor::homing {
+namespace ungula::motor::homing
+{
 
     class IHomeableMotor;
 
@@ -25,33 +26,33 @@ namespace ungula::motor::homing {
     /// The strategy only talks to the motor through IHomeableMotor. No direct GPIO
     /// access, no ISR coupling. Keeps strategies portable across drivers.
     class IHomingStrategy {
-        public:
-            virtual ~IHomingStrategy() = default;
+    public:
+        virtual ~IHomingStrategy() = default;
 
-            /// @brief Prepare sensors and command the first motion.
-            virtual void begin(IHomeableMotor& motor) = 0;
+        /// @brief Prepare sensors and command the first motion.
+        virtual void begin(IHomeableMotor &motor) = 0;
 
-            /// @brief Advance the internal phase. Returns true when homing has
-            /// finished (check succeeded() to know the outcome).
-            virtual bool tick(IHomeableMotor& motor) = 0;
+        /// @brief Advance the internal phase. Returns true when homing has
+        /// finished (check succeeded() to know the outcome).
+        virtual bool tick(IHomeableMotor &motor) = 0;
 
-            /// @brief Terminal cleanup. Called once after tick() returns true or
-            /// when the runner aborts/timeouts.
-            virtual void finish(IHomeableMotor& motor, bool succeeded) = 0;
+        /// @brief Terminal cleanup. Called once after tick() returns true or
+        /// when the runner aborts/timeouts.
+        virtual void finish(IHomeableMotor &motor, bool succeeded) = 0;
 
-            /// @brief Outcome of the last run. Valid after tick() returns true or
-            /// finish() has been called.
-            virtual bool succeeded() const = 0;
+        /// @brief Outcome of the last run. Valid after tick() returns true or
+        /// finish() has been called.
+        virtual bool succeeded() const = 0;
 
-            /// @brief Boot-time snapshot: is the axis already at the home
-            /// reference right now, without starting a homing sequence?
-            /// Called by LocalMotor::begin() to seed the initial isHomed()
-            /// value across reboots.
-            ///   - Limit-switch strategies: read the configured limit pin;
-            ///     return true if asserted.
-            ///   - Stall-based strategies: no reliable "am I at home"
-            ///     signal exists at rest, so they return false.
-            virtual bool isAtHomeReference(const IHomeableMotor& motor) const = 0;
+        /// @brief Boot-time snapshot: is the axis already at the home
+        /// reference right now, without starting a homing sequence?
+        /// Called by LocalMotor::begin() to seed the initial isHomed()
+        /// value across reboots.
+        ///   - Limit-switch strategies: read the configured limit pin;
+        ///     return true if asserted.
+        ///   - Stall-based strategies: no reliable "am I at home"
+        ///     signal exists at rest, so they return false.
+        virtual bool isAtHomeReference(const IHomeableMotor &motor) const = 0;
     };
 
-}  // namespace ungula::motor::homing
+} // namespace ungula::motor::homing

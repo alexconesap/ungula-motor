@@ -22,7 +22,8 @@
 /// own or filter a shared resource. Instead, it expresses intent ("move
 /// forward") and the application decides how to deliver it.
 
-namespace ungula::motor {
+namespace ungula::motor
+{
 
     /// @brief Motor command types for remote control.
     enum class MotorCommandType : uint8_t {
@@ -33,15 +34,15 @@ namespace ungula::motor {
         MOVE_TO,
         MOVE_BY,
         EXECUTE_PROFILE,
-        STOP,  // this will use the acceleration/deceleration parameters from the current profile,
-               // if any
-        EMERGENCY_STOP  // hard stop with no ramping
+        STOP, // this will use the acceleration/deceleration parameters from the current profile,
+        // if any
+        EMERGENCY_STOP // hard stop with no ramping
     };
 
     /// @brief Payload for commands that carry a distance value.
     struct MotorMoveParams {
-            float value = 0.0F;
-            DistanceUnit unit = DistanceUnit::STEPS;
+        float value = 0.0F;
+        DistanceUnit unit = DistanceUnit::STEPS;
     };
 
     /// @brief Accepts typed motor commands for delivery to a remote node.
@@ -50,18 +51,17 @@ namespace ungula::motor {
     /// motor subsystem. The implementation serializes the command into the
     /// project's wire protocol and sends it over the shared transport.
     class IMotorCommandSink {
-        public:
-            virtual ~IMotorCommandSink() = default;
+    public:
+        virtual ~IMotorCommandSink() = default;
 
-            /// @brief Send a simple command (enable, disable, stop, etc.).
-            virtual bool send(uint8_t motorId, MotorCommandType command) = 0;
+        /// @brief Send a simple command (enable, disable, stop, etc.).
+        virtual bool send(uint8_t motorId, MotorCommandType command) = 0;
 
-            /// @brief Send a move command with distance parameters.
-            virtual bool sendMove(uint8_t motorId, MotorCommandType command,
-                                  const MotorMoveParams& params) = 0;
+        /// @brief Send a move command with distance parameters.
+        virtual bool sendMove(uint8_t motorId, MotorCommandType command, const MotorMoveParams &params) = 0;
 
-            /// @brief Send a full motion profile for autonomous execution.
-            virtual bool sendProfile(uint8_t motorId, const MotionProfileSpec& profile) = 0;
+        /// @brief Send a full motion profile for autonomous execution.
+        virtual bool sendProfile(uint8_t motorId, const MotionProfileSpec &profile) = 0;
     };
 
-}  // namespace ungula::motor
+} // namespace ungula::motor

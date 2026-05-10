@@ -9,7 +9,8 @@
 
 #include "mock_homeable_motor.h"
 
-namespace {
+namespace
+{
 
     using ungula::motor::homing::HomingRunner;
     using ungula::motor::homing::IHomeableMotor;
@@ -18,50 +19,56 @@ namespace {
 
     // Scripted strategy so we can drive the runner deterministically.
     class ScriptedStrategy : public IHomingStrategy {
-        public:
-            int beginCount = 0;
-            int tickCount = 0;
-            int finishCount = 0;
-            bool lastFinishSucceeded = false;
+    public:
+        int beginCount = 0;
+        int tickCount = 0;
+        int finishCount = 0;
+        bool lastFinishSucceeded = false;
 
-            // The test can program how many ticks to run before reporting done,
-            // and what the final outcome should be.
-            int ticksUntilDone = 1;
-            bool succeedOnDone = true;
+        // The test can program how many ticks to run before reporting done,
+        // and what the final outcome should be.
+        int ticksUntilDone = 1;
+        bool succeedOnDone = true;
 
-            void begin(IHomeableMotor& /*motor*/) override {
-                ++beginCount;
+        void begin(IHomeableMotor & /*motor*/) override
+        {
+            ++beginCount;
+        }
+
+        bool tick(IHomeableMotor & /*motor*/) override
+        {
+            ++tickCount;
+            if (tickCount >= ticksUntilDone) {
+                succeeded_ = succeedOnDone;
+                return true;
             }
+            return false;
+        }
 
-            bool tick(IHomeableMotor& /*motor*/) override {
-                ++tickCount;
-                if (tickCount >= ticksUntilDone) {
-                    succeeded_ = succeedOnDone;
-                    return true;
-                }
-                return false;
-            }
+        void finish(IHomeableMotor & /*motor*/, bool succeeded) override
+        {
+            ++finishCount;
+            lastFinishSucceeded = succeeded;
+        }
 
-            void finish(IHomeableMotor& /*motor*/, bool succeeded) override {
-                ++finishCount;
-                lastFinishSucceeded = succeeded;
-            }
+        bool succeeded() const override
+        {
+            return succeeded_;
+        }
 
-            bool succeeded() const override {
-                return succeeded_;
-            }
+        bool isAtHomeReference(const IHomeableMotor & /*motor*/) const override
+        {
+            return scriptedAtHome;
+        }
 
-            bool isAtHomeReference(const IHomeableMotor& /*motor*/) const override {
-                return scriptedAtHome;
-            }
+        bool scriptedAtHome = false;
 
-            bool scriptedAtHome = false;
-
-        private:
-            bool succeeded_ = false;
+    private:
+        bool succeeded_ = false;
     };
 
-    TEST(HomingRunnerTest, StartThenStepReportsSuccess) {
+    TEST(HomingRunnerTest, StartThenStepReportsSuccess)
+    {
         MockHomeableMotor mock;
         ScriptedStrategy strategy;
         strategy.ticksUntilDone = 3;
@@ -81,7 +88,8 @@ namespace {
         EXPECT_TRUE(strategy.lastFinishSucceeded);
     }
 
-    TEST(HomingRunnerTest, FailurePropagates) {
+    TEST(HomingRunnerTest, FailurePropagates)
+    {
         MockHomeableMotor mock;
         ScriptedStrategy strategy;
         strategy.ticksUntilDone = 1;
@@ -94,7 +102,8 @@ namespace {
         EXPECT_FALSE(strategy.lastFinishSucceeded);
     }
 
-    TEST(HomingRunnerTest, AbortStopsAndCallsFinish) {
+    TEST(HomingRunnerTest, AbortStopsAndCallsFinish)
+    {
         MockHomeableMotor mock;
         ScriptedStrategy strategy;
         strategy.ticksUntilDone = 100;
@@ -110,7 +119,8 @@ namespace {
         EXPECT_FALSE(strategy.lastFinishSucceeded);
     }
 
-    TEST(HomingRunnerTest, StepAfterDoneIsNoOp) {
+    TEST(HomingRunnerTest, StepAfterDoneIsNoOp)
+    {
         MockHomeableMotor mock;
         ScriptedStrategy strategy;
         strategy.ticksUntilDone = 1;
@@ -124,4 +134,4 @@ namespace {
         EXPECT_EQ(strategy.finishCount, finishCallsAfterFirst);
     }
 
-}  // namespace
+} // namespace

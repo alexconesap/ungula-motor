@@ -9,7 +9,8 @@
 #include "../motor_types.h"
 #include "i_homing_strategy.h"
 
-namespace ungula::motor::homing {
+namespace ungula::motor::homing
+{
 
     /// @brief Home against a hard mechanical stop using the driver's stall
     /// detection (TMC2209 StallGuard, DIAG pin, etc.).
@@ -32,44 +33,46 @@ namespace ungula::motor::homing {
     /// Overwrites the HOMING motion profile internally. Callers that also use
     /// the HOMING profile for other moves should re-configure it after homing.
     class StallHomingStrategy : public IHomingStrategy {
-        public:
-            struct Config {
-                    Direction homingDirection = Direction::BACKWARD;
-                    int32_t fastSpeedSps = 2000;
-                    uint32_t fastAccelMs = 200U;
-                    int32_t slowSpeedSps = 500;
-                    uint32_t slowAccelMs = 100U;
-                    int32_t backoffSteps = 200;
-                    bool finalApproach = true;  // false = single-stall, faster but less repeatable.
-            };
+    public:
+        struct Config {
+            Direction homingDirection = Direction::BACKWARD;
+            int32_t fastSpeedSps = 2000;
+            uint32_t fastAccelMs = 200U;
+            int32_t slowSpeedSps = 500;
+            uint32_t slowAccelMs = 100U;
+            int32_t backoffSteps = 200;
+            bool finalApproach = true; // false = single-stall, faster but less repeatable.
+        };
 
-            explicit StallHomingStrategy(const Config& cfg);
+        explicit StallHomingStrategy(const Config &cfg);
 
-            void begin(IHomeableMotor& motor) override;
-            bool tick(IHomeableMotor& motor) override;
-            void finish(IHomeableMotor& motor, bool succeeded) override;
+        void begin(IHomeableMotor &motor) override;
+        bool tick(IHomeableMotor &motor) override;
+        void finish(IHomeableMotor &motor, bool succeeded) override;
 
-            bool succeeded() const override {
-                return succeeded_;
-            }
+        bool succeeded() const override
+        {
+            return succeeded_;
+        }
 
-            /// @brief Stall-based homing has no steady-state signal — at
-            /// rest the driver is "not stalling" whether or not the axis
-            /// is against the hard stop. Always false: after any reboot
-            /// the caller must run home() before the position is trusted.
-            bool isAtHomeReference(const IHomeableMotor& /*motor*/) const override {
-                return false;
-            }
+        /// @brief Stall-based homing has no steady-state signal — at
+        /// rest the driver is "not stalling" whether or not the axis
+        /// is against the hard stop. Always false: after any reboot
+        /// the caller must run home() before the position is trusted.
+        bool isAtHomeReference(const IHomeableMotor & /*motor*/) const override
+        {
+            return false;
+        }
 
-        private:
-            enum class Phase : uint8_t { FastApproach, Backoff, SlowApproach, Done };
+    private:
+        enum class Phase : uint8_t { FastApproach, Backoff, SlowApproach, Done };
 
-            void startApproach(IHomeableMotor& motor, int32_t speedSps, uint32_t accelMs);
-            void startBackoff(IHomeableMotor& motor);
+        void startApproach(IHomeableMotor &motor, int32_t speedSps, uint32_t accelMs);
+        void startBackoff(IHomeableMotor &motor);
 
-            Config cfg_;
-            Phase phase_ = Phase::FastApproach;
-            bool succeeded_ = false;
+        Config cfg_;
+        Phase phase_ = Phase::FastApproach;
+        bool succeeded_ = false;
     };
 
-}  // namespace ungula::motor::homing
+} // namespace ungula::motor::homing
