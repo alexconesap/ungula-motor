@@ -124,7 +124,7 @@ namespace
         e.previousState = MotorFsmState::RunningForward;
         e.newState = MotorFsmState::TargetReached;
         e.positionSteps = 999;
-        e.timestampMs = 1 '700' 000 '000' 000LL;
+        e.timestampMs = 1'700'000'000'000LL;
 
         // Cast through the interface so we exercise the virtual dispatch.
         ungula::motor::IMotorEventListener &asListener = coord;

@@ -97,14 +97,14 @@ namespace
         RemoteMotor m(sink, /*motorId=*/9);
 
         MotionProfileSpec spec{};
-        spec.startTimeMs = 1 '700' 000 '000' 000LL; // post-int64 widening
+        spec.startTimeMs = 1'700'000'000'000LL; // post-int64 widening
         spec.targetPosition = 12345;
         spec.maxVelocitySps = 4000;
         m.executeProfile(spec);
 
         ASSERT_EQ(sink.profiles.size(), 1U);
         EXPECT_EQ(sink.profiles[0].id, 9);
-        EXPECT_EQ(sink.profiles[0].profile.startTimeMs, 1 '700' 000 '000' 000LL);
+        EXPECT_EQ(sink.profiles[0].profile.startTimeMs, 1'700'000'000'000LL);
         EXPECT_EQ(sink.profiles[0].profile.targetPosition, 12345);
         EXPECT_EQ(sink.profiles[0].profile.maxVelocitySps, 4000);
     }

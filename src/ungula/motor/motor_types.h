@@ -139,10 +139,11 @@ namespace ungula::motor
     // ---- Step generator constants ----
     namespace step
     {
-        constexpr uint32_t TIMER_FREQ_HZ = 1 '000' 000; /// 1 MHz timer for step pulses.
+        constexpr uint32_t TIMER_FREQ_HZ = 1'000'000; /// 1 MHz timer for step pulses.
         constexpr uint32_t MIN_ALARM_TICKS = 2; /// Fastest allowed timer period.
-        constexpr uint32_t IDLE_ALARM_TICKS =
-            500'000;  /// ~1 SPS — effectively parked. constexpr uint32_t RAMP_SERVICE_US = 10'000;    /// Ramp esp_timer period in microseconds. constexpr uint32_t RAMP_SERVICE_MS = 10; /// Ramp update delta in milliseconds.
+        constexpr uint32_t IDLE_ALARM_TICKS = 500'000; /// ~1 SPS — effectively parked.
+        constexpr uint32_t RAMP_SERVICE_US = 10'000; /// Ramp esp_timer period in microseconds.
+        constexpr uint32_t RAMP_SERVICE_MS = 10; /// Ramp update delta in milliseconds.
         constexpr float TOGGLES_PER_STEP = 2.0F; /// Two pin toggles per full step.
         constexpr float MIN_RUNNING_SPS = 1.0F; /// Below this, motor considered stopped.
     } // namespace step
@@ -150,8 +151,8 @@ namespace ungula::motor
     // ---- Internal service timer ----
     namespace svc
     {
-        constexpr uint32_t MOTOR_SERVICE_US =
-            10'000;  /// LocalMotor safety check interval (10 ms). constexpr uint32_t SG_POLL_INTERVAL_MS = 50; /// SG_RESULT UART poll throttle (avoids blocking esp_timer).
+        constexpr uint32_t MOTOR_SERVICE_US = 10'000; /// LocalMotor safety check interval (10 ms).
+        constexpr uint32_t SG_POLL_INTERVAL_MS = 50; /// SG_RESULT UART poll throttle (avoids blocking esp_timer).
     } // namespace svc
 
     // ---- Homing constants ----
