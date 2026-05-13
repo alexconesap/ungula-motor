@@ -1,6 +1,4 @@
-# UngulaDisplay Examples
-
-Two example sketches that show how to use the display and UI library.
+# UngulaMotor Examples
 
 | Example | Display | Board | Description |
 | --- | --- | --- | --- |
