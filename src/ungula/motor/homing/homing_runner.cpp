@@ -4,7 +4,7 @@
 
 #include "homing_runner.h"
 
-#include <ungula/core/time/time_control.h>
+#include <ungula/core/time/time.h>
 
 #include "i_homeable_motor.h"
 #include "i_homing_strategy.h"

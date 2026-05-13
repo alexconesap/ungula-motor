@@ -6,7 +6,7 @@
 #include <emblogx/logger.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
-#include <ungula/core/time/time_control.h>
+#include <ungula/core/time/time.h>
 #include <ungula/hal/gpio/gpio_access.h>
 #include <cassert>
 #include <cstdio>

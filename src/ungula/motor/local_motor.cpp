@@ -7,7 +7,7 @@
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/portmacro.h>
-#include <ungula/core/time/time_control.h>
+#include <ungula/core/time/time.h>
 #include <cassert>
 
 namespace ungula::motor

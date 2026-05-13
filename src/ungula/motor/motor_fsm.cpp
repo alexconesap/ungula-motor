@@ -3,7 +3,7 @@
 // See LICENSE file for details.
 
 #include "motor_fsm.h"
-#include <ungula/core/time/time_control.h>
+#include <ungula/core/time/time.h>
 
 namespace ungula::motor
 {

@@ -14,7 +14,7 @@
 // It pulls in platform-independent types, interfaces, and utilities.
 //
 // Platform-dependent components must be included explicitly:
-//   #include <ungula/motor/motor_fsm.h>                          // needs time/time_control.h
+//   #include <ungula/motor/motor_fsm.h>                          // needs time/time.h
 //   #include <ungula/motor/limit_switch.h>                       // needs hal/gpio/gpio_access.h
 //   #include <ungula/motor/step_generator.h>                     // needs ESP-IDF gptimer
 //   #include <ungula/motor/local_motor.h>                        // needs ESP-IDF esp_timer
