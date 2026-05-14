@@ -7,7 +7,6 @@
 #include <cstdint>
 #include "homing/i_homeable_motor.h"
 #include "homing/i_homing_strategy.h"
-#include "i_motor.h"
 #include "i_motor_driver.h"
 #include "limit_switch.h"
 #include "motion_profile.h"

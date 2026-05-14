@@ -123,6 +123,10 @@ namespace ungula::motor::tmc
         assert(stepPin_ != ungula::motor::GPIO_NONE);
         assert(enablePin_ != ungula::motor::GPIO_NONE);
         assert(dirPin_ != ungula::motor::GPIO_NONE);
+
+        // On ESP-IDF the FreeRTOS scheduler is up before static C++ constructors run,
+        // so this is safe at global init time.
+        uartMutex_ = xSemaphoreCreateMutex();
     }
 
     const char *Tmc2209::module() const
@@ -167,7 +171,10 @@ namespace ungula::motor::tmc
 
     void Tmc2209::begin()
     {
-        // Create UART mutex once. Safe to call multiple times (guard on null).
+        // UART mutex is created in the constructor so that pre-begin()
+        // setters (setRunCurrent, setMicrosteps, ...) can safely issue
+        // register writes. Re-create defensively only if a host destroyed
+        // it — should not happen in normal use.
         if (uartMutex_ == nullptr) {
             uartMutex_ = xSemaphoreCreateMutex();
         }
@@ -175,8 +182,10 @@ namespace ungula::motor::tmc
         // Configure GPIO pins owned by the driver
         ungula::hal::gpio::configOutput(enablePin_);
         ungula::hal::gpio::configOutput(dirPin_);
+        ungula::hal::gpio::configOutput(stepPin_);
         ungula::hal::gpio::setHigh(enablePin_); // Start disabled (active LOW)
         ungula::hal::gpio::setLow(dirPin_);
+        ungula::hal::gpio::setLow(stepPin_);
 
         // Clear global status flags (write 1 to clear)
         writeRegister(reg::GSTAT, GSTAT_CLEAR_ALL);
