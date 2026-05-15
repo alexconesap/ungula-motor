@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "ungula/hal/gpio/gpio.h"
+
 #include "ungula/motor/axis_types.h"
 #include "ungula/motor/limits/sensor_bank.h"
 #include "ungula/motor/limits/sensor_input.h"
@@ -276,6 +278,93 @@ TEST(SensorBankTest, ServiceDoesNotCrashOnPolledSensors)
         bank.service(20);
         EXPECT_FALSE(bank.isActive(SensorRole::Home));
         EXPECT_FALSE(bank.isActive(SensorRole::TravelLimit, Direction::Forward));
+}
+
+// =====================================================================
+// Polled-sensor pull-mode regression tests
+// =====================================================================
+// `SensorBank::begin()` previously called plain `gpio::configInput()`
+// for polled sensors, which disables both pulls on ESP32. A wired-but-
+// floating (or unwired) NC polled pin then floats LOW → `readActive`
+// returns true → `pumpSensors` halts motion every service tick on
+// TravelLimit / Home. The fix mirrors the polarity-derived pull
+// selection the ISR branch already uses. These tests assert the
+// host-backend records the correct config call so the fix doesn't
+// regress.
+
+TEST(SensorBankTest, PolledNcSensorAppliesPullup)
+{
+        namespace hg = ungula::hal::gpio;
+        hg::detail::resetInputMode(40);
+
+        SensorInputConfig cfg;
+        cfg.pin = 40;
+        cfg.role = SensorRole::Home;
+        cfg.polarity = SensorPolarity::NormallyClosed;
+
+        FakePulseEngine engine;
+        SensorBank bank;
+        ASSERT_TRUE(bank.begin(&cfg, 1, &engine).ok());
+
+        EXPECT_EQ(hg::detail::lastInputMode(40), hg::detail::HostInputMode::Pullup);
+}
+
+TEST(SensorBankTest, PolledNoSensorAppliesPulldown)
+{
+        namespace hg = ungula::hal::gpio;
+        hg::detail::resetInputMode(41);
+
+        SensorInputConfig cfg;
+        cfg.pin = 41;
+        cfg.role = SensorRole::Home;
+        cfg.polarity = SensorPolarity::NormallyOpen;
+
+        FakePulseEngine engine;
+        SensorBank bank;
+        ASSERT_TRUE(bank.begin(&cfg, 1, &engine).ok());
+
+        EXPECT_EQ(hg::detail::lastInputMode(41), hg::detail::HostInputMode::Pulldown);
+}
+
+TEST(SensorBankTest, PolledTravelLimitNcAppliesPullup)
+{
+        // The exact bench scenario that triggered the bug: a polled NC
+        // TravelLimit sensor. Without a pull-up, an unwired pin floats
+        // LOW and the motor halts on every service tick.
+        namespace hg = ungula::hal::gpio;
+        hg::detail::resetInputMode(42);
+
+        SensorInputConfig cfg;
+        cfg.pin = 42;
+        cfg.role = SensorRole::TravelLimit;
+        cfg.polarity = SensorPolarity::NormallyClosed;
+        cfg.direction = Direction::Forward;
+
+        FakePulseEngine engine;
+        SensorBank bank;
+        ASSERT_TRUE(bank.begin(&cfg, 1, &engine).ok());
+
+        EXPECT_EQ(hg::detail::lastInputMode(42), hg::detail::HostInputMode::Pullup);
+}
+
+TEST(SensorBankTest, IsrSensorStillUsesInterruptConfig)
+{
+        // Sanity check: the ISR branch wasn't disturbed by the polled
+        // branch fix — ISR-role sensors still go through
+        // `configInputInterrupt`, not `configInputPullup`.
+        namespace hg = ungula::hal::gpio;
+        hg::detail::resetInputMode(43);
+
+        SensorInputConfig cfg;
+        cfg.pin = 43;
+        cfg.role = SensorRole::EmergencyStop;
+        cfg.polarity = SensorPolarity::NormallyClosed;
+
+        FakePulseEngine engine;
+        SensorBank bank;
+        ASSERT_TRUE(bank.begin(&cfg, 1, &engine).ok());
+
+        EXPECT_EQ(hg::detail::lastInputMode(43), hg::detail::HostInputMode::Interrupt);
 }
 
 } // namespace

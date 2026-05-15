@@ -158,7 +158,26 @@ Status SensorBank::begin(const SensorInputConfig *sensors, uint8_t count,
                                 return Status::Err(ErrorCode::InvalidConfig);
                         }
                 } else {
-                        if (!gpio::configInput(cfg.pin)) {
+                        // Polled sensors get the SAME polarity-derived pull
+                        // the ISR branch uses. Without this, a configured-but-
+                        // not-wired NC pin floats LOW on ESP32 → `readActive`
+                        // returns true → `pumpSensors` halts every tick on
+                        // TravelLimit, never reaching a real stall. The
+                        // earlier polled path called `gpio::configInput`
+                        // which disables both pulls.
+                        bool ok = false;
+                        switch (pull) {
+                        case gpio::PullMode::UP:
+                                ok = gpio::configInputPullup(cfg.pin);
+                                break;
+                        case gpio::PullMode::DOWN:
+                                ok = gpio::configInputPulldown(cfg.pin);
+                                break;
+                        default:
+                                ok = gpio::configInput(cfg.pin);
+                                break;
+                        }
+                        if (!ok) {
                                 end();
                                 return Status::Err(ErrorCode::InvalidConfig);
                         }
