@@ -382,6 +382,65 @@ Status Axis::jog(Direction direction)
         return armAndStart(move, AxisState::Jogging);
 }
 
+Status Axis::jog(Direction direction, Speed s)
+{
+        // Resolve user units against the configured scaling, then run
+        // through `limitsForFeed` so the planner sees a one-shot
+        // velocity cap without mutating `common_.limits`. The next
+        // unqualified `jog(Direction)` reverts to the configured max.
+        auto r = toStepsPerSec(s, common_.units);
+        if (!r.ok())
+                return Status::Err(r.error());
+
+        if (state_ == AxisState::Uninitialized)
+                return Status::Err(ErrorCode::NotInitialized);
+        if (state_ == AxisState::Disabled)
+                return Status::Err(ErrorCode::NotEnabled);
+        if (state_ == AxisState::Moving || state_ == AxisState::Jogging ||
+            state_ == AxisState::Homing) {
+                return Status::Err(ErrorCode::MotionInProgress);
+        }
+        if (state_ == AxisState::Faulted || state_ == AxisState::EmergencyStopped) {
+                return Status::Err(ErrorCode::DriverFault);
+        }
+
+        constexpr uint32_t kJogSafetySteps = 1'000'000;
+        const auto L = limitsForFeed(r.takeValue());
+        const auto move = planner_.planJog(direction, kJogSafetySteps, L,
+                                           timerResolutionHz_, timerMinTicks_);
+        return armAndStart(move, AxisState::Jogging);
+}
+
+// --- Trajectory tuning (runtime) ---------------------------------
+
+Status Axis::setMaxVelocity(Speed s)
+{
+        if (motionInFlight_)
+                return Status::Err(ErrorCode::MotionInProgress);
+        return applyMaxVelocity(common_.limits, s, common_.units);
+}
+
+Status Axis::setAcceleration(Acceleration a)
+{
+        if (motionInFlight_)
+                return Status::Err(ErrorCode::MotionInProgress);
+        return applyAcceleration(common_.limits, a, common_.units);
+}
+
+Status Axis::setDeceleration(Acceleration a)
+{
+        if (motionInFlight_)
+                return Status::Err(ErrorCode::MotionInProgress);
+        return applyDeceleration(common_.limits, a, common_.units);
+}
+
+Status Axis::setRampProfile(Acceleration a)
+{
+        if (motionInFlight_)
+                return Status::Err(ErrorCode::MotionInProgress);
+        return applyRampProfile(common_.limits, a, common_.units);
+}
+
 Status Axis::stop(StopMode mode)
 {
         if (state_ == AxisState::Uninitialized)

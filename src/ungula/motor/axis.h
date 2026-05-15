@@ -10,6 +10,7 @@
 #include "ungula/motor/axis_types.h"
 #include "ungula/motor/axis_state.h"
 #include "ungula/motor/axis_config.h"
+#include "ungula/motor/motion_units.h"
 #include "ungula/motor/planning/motion_planner.h"
 #include "ungula/motor/limits/sensor_bank.h"
 #include "ungula/motor/homing/homing_controller.h"
@@ -128,8 +129,28 @@ class Axis : public IHomingAxis {
         Status moveBy(Distance delta, DistanceUnit unit = DistanceUnit::Steps);
         Status jog(Direction direction);
 
+        /// Per-jog feed-rate override in user units. Resolves `s`
+        /// against the axis's `UnitScaling`; returns `InvalidConfig`
+        /// if the unit requires a scaling field that isn't configured.
+        /// Speed is a magnitude — direction is supplied separately.
+        Status jog(Direction direction, Speed s);
+
         Status stop(StopMode mode = StopMode::Immediate);
         Status emergencyStop();
+
+        // --- Trajectory tuning (runtime) ---------------------------------
+        //
+        // Mutate the live `TrajectoryLimits` in user units. The next
+        // `moveTo` / `moveBy` / `jog` picks up the new value. Calls are
+        // rejected with `MotionInProgress` if motion is currently in
+        // flight — the planner snapshots the limits at arm time and
+        // changing them mid-flight has no effect on the running move.
+
+        Status setMaxVelocity(Speed s);
+        Status setAcceleration(Acceleration a);
+        Status setDeceleration(Acceleration a);
+        /// Sets accel == decel in one call. Common for symmetric profiles.
+        Status setRampProfile(Acceleration a);
 
         // --- Homing ------------------------------------------------------
 

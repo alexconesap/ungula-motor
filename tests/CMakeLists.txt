@@ -88,6 +88,15 @@ add_executable(test_axis_step_dir_stepper
 target_link_libraries(test_axis_step_dir_stepper gtest_main)
 
 # ---------------------------------------------------------------------------
+# Speed / Acceleration unit conversions — pure-function tests, no
+# Axis / engine dependencies. Header-only; nothing extra to compile.
+# ---------------------------------------------------------------------------
+add_executable(test_motion_units
+    test_motion_units.cpp
+)
+target_link_libraries(test_motion_units gtest_main)
+
+# ---------------------------------------------------------------------------
 # Sensors, homing controller, axis event emission.
 # ---------------------------------------------------------------------------
 add_executable(test_sensor_bank
@@ -159,6 +168,7 @@ gtest_discover_tests(test_hal_pulse_engine)
 gtest_discover_tests(test_fake_pulse_engine)
 gtest_discover_tests(test_step_dir_actuator)
 gtest_discover_tests(test_axis_step_dir_stepper)
+gtest_discover_tests(test_motion_units)
 gtest_discover_tests(test_sensor_bank)
 gtest_discover_tests(test_homing_controller)
 gtest_discover_tests(test_axis_events)

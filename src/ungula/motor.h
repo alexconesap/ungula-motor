@@ -11,6 +11,7 @@
 #include "ungula/motor/axis_types.h"
 #include "ungula/motor/axis_state.h"
 #include "ungula/motor/axis_config.h"
+#include "ungula/motor/motion_units.h"
 #include "ungula/motor/axis.h"
 #include "ungula/motor/events/axis_event.h"
 
