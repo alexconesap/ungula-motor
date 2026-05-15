@@ -133,6 +133,18 @@ class SensorBank {
         /// if none. Convenience for homing strategies.
         uint8_t homePin() const;
 
+        /// Cumulative number of stall-sensor (DIAG) ISR edges observed
+        /// since `begin()`. Monotonically increasing; the regular
+        /// `service()` / arm-window logic does NOT reset this counter.
+        /// Diagnostics-only — read from task context. Returns 0 when
+        /// no stall sensor is configured or no DIAG hit has fired.
+        ///
+        /// Useful for telling "DIAG wire dead" apart from "DIAG firing
+        /// but the bank is debouncing it": if the chip is asserting
+        /// DIAG at all, this counter ticks regardless of the arm
+        /// window or `stallHitsToTrigger`.
+        uint32_t totalStallHits() const;
+
     private:
         /// Per-sensor runtime state. Polled sensors track debounce
         /// history; ISR sensors carry a pointer to the bank's atomic
@@ -185,6 +197,9 @@ class SensorBank {
         std::atomic<uint32_t> stallHitCounter_{ 0 };
         std::atomic<bool> stallLatched_{ false };
         std::atomic<int64_t> stallArmedAtMs_{ 0 }; // 0 = not armed
+        // Cumulative DIAG-edge counter. Never reset by `service()`;
+        // only zeroed by `end()`. Diagnostic visibility for the host.
+        std::atomic<uint32_t> stallHitsTotal_{ 0 };
         uint8_t stallHitsToTrigger_ = 4;
         uint16_t stallArmDelayMs_ = 200; // written only in begin() (pre-ISR)
 

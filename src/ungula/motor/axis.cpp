@@ -644,6 +644,11 @@ AxisId Axis::id() const
         return axisId_;
 }
 
+uint32_t Axis::totalStallHits() const
+{
+        return sensors_.totalStallHits();
+}
+
 // =====================================================================
 // Service path
 // =====================================================================

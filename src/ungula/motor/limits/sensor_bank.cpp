@@ -57,6 +57,10 @@ UNGULA_ISR_ATTR void SensorBank::onIsrTrampoline(void *ctx)
                 break;
         case SensorRole::Stall: {
                 self->stallHitCounter_.fetch_add(1, std::memory_order_acq_rel);
+                // Cumulative diagnostic counter — incremented unconditionally
+                // so the host can see DIAG edges even when the debounce /
+                // arm-window logic discards them.
+                self->stallHitsTotal_.fetch_add(1, std::memory_order_acq_rel);
                 const int64_t armedAt =
                         self->stallArmedAtMs_.load(std::memory_order_acquire);
                 if (armedAt == 0)
@@ -236,6 +240,7 @@ void SensorBank::end()
         stallHitsToTrigger_ = 4;
         stallArmDelayMs_ = 200;
         stallArmedAtMs_.store(0, std::memory_order_release);
+        stallHitsTotal_.store(0, std::memory_order_release);
         begun_ = false;
 }
 
@@ -395,6 +400,11 @@ bool SensorBank::isAssertedLive(SensorRole role) const
                         return true;
         }
         return false;
+}
+
+uint32_t SensorBank::totalStallHits() const
+{
+        return stallHitsTotal_.load(std::memory_order_acquire);
 }
 
 uint8_t SensorBank::homePin() const

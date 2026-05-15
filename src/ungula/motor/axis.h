@@ -212,6 +212,12 @@ class Axis : public IHomingAxis {
         StopReason lastStopReason() const;
         AxisId id() const;
 
+        /// Cumulative count of DIAG / stall-sensor ISR hits since
+        /// `begin()`. Includes hits discarded by the arm window or
+        /// `stallHitsToTrigger` debounce; this is the raw edge count.
+        /// 0 if no Stall sensor is configured.
+        uint32_t totalStallHits() const;
+
         // --- Service path ------------------------------------------------
 
         /// Single periodic update. `nowMs` is monotonic milliseconds. Host
