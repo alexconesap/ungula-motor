@@ -212,6 +212,41 @@ class Axis : public IHomingAxis {
         StopReason lastStopReason() const;
         AxisId id() const;
 
+        // --- Convenience state predicates -------------------------------
+        //
+        // Sugar over `state()` / `faultStatus()` for the common
+        // call-site patterns. Use these instead of raw state-enum
+        // comparisons so the semantics of "running", "idle" and
+        // "faulted" stay defined in one place.
+
+        /// True while the engine is actively emitting steps —
+        /// `Moving`, `Jogging`, or `Homing`. False everywhere else,
+        /// including `Faulted` and `EmergencyStopped`. Suitable for
+        /// the classic blocking-wait loop
+        /// `while (axis.isRunning()) { axis.service(now); yield(); }`.
+        bool isRunning() const;
+
+        /// True only when the axis is `Idle`. NOT a generalised "is
+        /// the motor stopped" — `Disabled`, `Faulted`, and
+        /// `EmergencyStopped` are all "not moving" but require very
+        /// different host handling. If you need to gate the next
+        /// motion command, combine with `hasFault()` and the
+        /// `enable()` lifecycle yourself.
+        bool isIdle() const;
+
+        /// True if the axis is in any fault condition. ORs three
+        /// signals so the host doesn't have to:
+        ///   - `state() == AxisState::Faulted`
+        ///   - `state() == AxisState::EmergencyStopped`
+        ///   - `faultStatus().active()`
+        /// The third clause matters because the pulse engine can
+        /// latch a fault from an ISR (e.g. `haltFromIsr` on a
+        /// `CrashLimit` edge) BEFORE the next `service()` tick has
+        /// consumed that latch and pushed `state_` into `Faulted`.
+        /// During that window `state()` still reports `Moving` /
+        /// `Jogging`, but `hasFault()` returns true.
+        bool hasFault() const;
+
         /// Cumulative count of DIAG / stall-sensor ISR hits since
         /// `begin()`. Includes hits discarded by the arm window or
         /// `stallHitsToTrigger` debounce; this is the raw edge count.

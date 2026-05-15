@@ -717,6 +717,27 @@ AxisId Axis::id() const
         return axisId_;
 }
 
+bool Axis::isRunning() const
+{
+        return state_ == AxisState::Moving || state_ == AxisState::Jogging ||
+               state_ == AxisState::Homing;
+}
+
+bool Axis::isIdle() const
+{
+        return state_ == AxisState::Idle;
+}
+
+bool Axis::hasFault() const
+{
+        // The third check (`faultStatus().active()`) catches the window
+        // between an ISR-side latch and the next `service()` tick that
+        // promotes that latch to `state_`. Without it, `hasFault()`
+        // would lie during that ~ms-scale gap on `Moving` / `Jogging`.
+        return state_ == AxisState::Faulted ||
+               state_ == AxisState::EmergencyStopped || faultStatus().active();
+}
+
 uint32_t Axis::totalStallHits() const
 {
         return sensors_.totalStallHits();

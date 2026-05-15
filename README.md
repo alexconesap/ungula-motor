@@ -788,6 +788,31 @@ The important part is not the loop itself, but the exit criteria:
 - inspect `lastStopReason()` and `faultStatus()` to classify why motion ended
 - add a timeout so a miswired system cannot block forever
 
+### Convenience state predicates
+
+Three helpers make this pattern less error-prone than raw `state() == AxisState::Xxx` comparisons:
+
+- **`axis.isRunning()`** — `true` while the engine is actively emitting steps (`Moving`, `Jogging`, `Homing`). `false` everywhere else, including faulted states. This is what you put in your `while` condition.
+- **`axis.isIdle()`** — `true` only when `state() == AxisState::Idle`. NOT a generic "stopped" check — `Disabled`, `Faulted`, and `EmergencyStopped` are all "not running" but need different host handling. Use this when you specifically want to know "ready to receive the next motion command".
+- **`axis.hasFault()`** — `true` if `state` is `Faulted` / `EmergencyStopped` OR `faultStatus().active()`. The OR matters: the pulse engine can latch a fault from an ISR before the next `service()` tick promotes that latch into `state_`. During that ~ms-scale window `state()` still reports `Moving`, but `hasFault()` already returns `true`. Always prefer `hasFault()` over a raw state comparison.
+
+The minimal pattern collapses to:
+
+```cpp
+axis.moveBy(20, DistanceUnit::Cm);
+while (axis.isRunning()) {
+    axis.service(ungula::core::time::millis());
+    ungula::core::time::yield();
+}
+if (axis.hasFault()) {
+    // inspect axis.faultStatus() / lastStopReason()
+} else {
+    switch (axis.lastStopReason()) { /* TargetReached / TravelLimit / ... */ }
+}
+```
+
+The richer outcome-mapping helper below adds a timeout and classifies the stop reason — useful for recipe steps and test routines.
+
 ```cpp
 #include <cstdint>
 
@@ -828,18 +853,17 @@ MoveWaitResult moveBy20CmAndWait(Axis& axis, uint32_t timeoutMs)
         const int64_t nowMs = ungula::core::time::millis();
         axis.service(nowMs);
 
-        const AxisState st = axis.state();
         const StopReason reason = axis.lastStopReason();
         const FaultStatus fault = axis.faultStatus();
 
-        if (st == AxisState::Faulted || st == AxisState::EmergencyStopped) {
+        if (axis.hasFault()) {
             result.outcome = MoveWaitOutcome::Faulted;
             result.stopReason = reason;
             result.fault = fault;
             return result;
         }
 
-        if (st == AxisState::Idle || st == AxisState::Disabled) {
+        if (!axis.isRunning()) {
             result.stopReason = reason;
             result.fault = fault;
             switch (reason) {

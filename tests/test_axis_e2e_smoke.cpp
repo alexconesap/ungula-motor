@@ -237,4 +237,104 @@ TEST(AxisE2ESmokeTest, MotionRejectedDuringMotion)
         EXPECT_EQ(fx.axis->jog(Direction::Forward).error(), ErrorCode::MotionInProgress);
 }
 
+// =====================================================================
+// Convenience state predicates: isRunning() / isIdle() / hasFault()
+// =====================================================================
+
+TEST(AxisE2ESmokeTest, PredicatesAcrossLifecycle)
+{
+        auto fx = build();
+        ASSERT_NE(fx.axis.get(), nullptr);
+
+        // Uninitialized — nothing is true.
+        EXPECT_FALSE(fx.axis->isRunning());
+        EXPECT_FALSE(fx.axis->isIdle());
+        EXPECT_FALSE(fx.axis->hasFault());
+
+        // Disabled — still no fault, but not idle (host must enable
+        // first; the lib's `Idle` strictly means "enabled and ready").
+        ASSERT_TRUE(fx.axis->begin().ok());
+        EXPECT_FALSE(fx.axis->isRunning());
+        EXPECT_FALSE(fx.axis->isIdle());
+        EXPECT_FALSE(fx.axis->hasFault());
+
+        // Idle.
+        ASSERT_TRUE(fx.axis->enable().ok());
+        EXPECT_FALSE(fx.axis->isRunning());
+        EXPECT_TRUE(fx.axis->isIdle());
+        EXPECT_FALSE(fx.axis->hasFault());
+
+        // Moving (moveBy in flight).
+        ASSERT_TRUE(fx.axis->moveBy(500).ok());
+        EXPECT_TRUE(fx.axis->isRunning());
+        EXPECT_FALSE(fx.axis->isIdle());
+        EXPECT_FALSE(fx.axis->hasFault());
+
+        // After natural completion → back to Idle.
+        fx.engine->runMove();
+        fx.axis->service(10);
+        EXPECT_FALSE(fx.axis->isRunning());
+        EXPECT_TRUE(fx.axis->isIdle());
+        EXPECT_FALSE(fx.axis->hasFault());
+
+        // Jogging.
+        ASSERT_TRUE(fx.axis->jog(Direction::Forward).ok());
+        EXPECT_TRUE(fx.axis->isRunning());
+        EXPECT_FALSE(fx.axis->isIdle());
+
+        // Emergency stop → EmergencyStopped + faulted.
+        ASSERT_TRUE(fx.axis->emergencyStop().ok());
+        fx.axis->service(20);
+        EXPECT_FALSE(fx.axis->isRunning());
+        EXPECT_FALSE(fx.axis->isIdle());
+        EXPECT_TRUE(fx.axis->hasFault());
+
+        // clearFault() must clear the fault flag. We deliberately
+        // don't pin down the post-clear state here (Disabled vs Idle
+        // is a recovery-policy detail); the contract is `hasFault()`
+        // turns false.
+        ASSERT_TRUE(fx.axis->clearFault().ok());
+        EXPECT_FALSE(fx.axis->isRunning());
+        EXPECT_FALSE(fx.axis->hasFault());
+}
+
+TEST(AxisE2ESmokeTest, HasFaultCatchesIsrLatchBeforeServiceTick)
+{
+        // The load-bearing test for `hasFault()`. The pulse engine can
+        // latch a fault from an ISR (e.g. CrashLimit edge) before the
+        // next `service()` tick promotes that latch to `state_`. During
+        // that window `state()` still says `Moving`, but `hasFault()`
+        // must return true — otherwise host code that polls `hasFault()`
+        // between service ticks would miss the fault for milliseconds.
+        auto fx = build();
+        ASSERT_NE(fx.axis.get(), nullptr);
+        ASSERT_TRUE(fx.axis->begin().ok());
+        ASSERT_TRUE(fx.axis->enable().ok());
+        ASSERT_TRUE(fx.axis->moveBy(1000).ok());
+
+        // Pre-condition: motion is running, no fault yet.
+        ASSERT_TRUE(fx.axis->isRunning());
+        ASSERT_FALSE(fx.axis->hasFault());
+        ASSERT_EQ(fx.axis->state(), AxisState::Moving);
+
+        // ISR-side fault latch — same path a real CrashLimit edge takes.
+        fx.engine->haltFromIsr(StopReason::LimitSwitch);
+
+        // Crucially: do NOT call service() yet. The latch is set on the
+        // engine; state_ has not been updated. `state()` still reports
+        // Moving (or transitions internally), but `hasFault()` must
+        // already be true because the engine's `faultStatus()` is.
+        EXPECT_TRUE(fx.axis->hasFault())
+                << "hasFault() must observe the engine-side latch "
+                   "even before service() promotes it into state_";
+
+        // After service(), state_ catches up to Faulted; predicates
+        // must remain consistent.
+        fx.axis->service(30);
+        EXPECT_EQ(fx.axis->state(), AxisState::Faulted);
+        EXPECT_FALSE(fx.axis->isRunning());
+        EXPECT_FALSE(fx.axis->isIdle());
+        EXPECT_TRUE(fx.axis->hasFault());
+}
+
 } // namespace
