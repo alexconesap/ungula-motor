@@ -291,4 +291,84 @@ TEST(AxisStepDirStepperTest, OwnershipDestructsCleanly)
         // order: actuator → engine → timer.
 }
 
+// =====================================================================
+// Pre-flight TravelLimit gate
+// =====================================================================
+// The host `gpio::read()` stub returns LOW (false). For a polled
+// NormallyClosed sensor the lib treats LOW as ACTIVE — so configuring
+// a TravelLimit as NC gives us an "already-active limit" condition at
+// boot without needing a separate test seam. Two `service()` ticks
+// past the 20 ms debounce window stabilize the slot as active.
+//
+// The gate must refuse motion in the limit's direction and allow
+// motion in the opposite direction.
+
+TEST(AxisStepDirStepperTest, JogIntoActiveTravelLimitRejected)
+{
+        StepDirStepperAxisConfig cfg = makeStepperCfg();
+        cfg.sensors[0].pin = 21;
+        cfg.sensors[0].role = SensorRole::TravelLimit;
+        cfg.sensors[0].polarity = SensorPolarity::NormallyClosed; // active at LOW
+        cfg.sensors[0].direction = Direction::Backward;
+        cfg.sensors[0].debounceMs = 10;
+        cfg.sensorCount = 1;
+
+        auto r = Axis::createStepDirStepper(cfg);
+        ASSERT_TRUE(r.ok());
+        auto axis = r.takeValue();
+        ASSERT_TRUE(axis->begin().ok());
+        ASSERT_TRUE(axis->enable().ok());
+
+        // Drive two service ticks past the debounce window so the
+        // bank promotes the host-stub LOW reading to a stable
+        // "active" state.
+        axis->service(0);
+        axis->service(50);
+
+        // Jog toward the active backward limit — must be rejected.
+        EXPECT_EQ(axis->jog(Direction::Backward).error(), ErrorCode::LimitActive);
+        // Jog the OPPOSITE way — must succeed (no forward limit).
+        EXPECT_TRUE(axis->jog(Direction::Forward).ok());
+}
+
+TEST(AxisStepDirStepperTest, MoveByIntoActiveTravelLimitRejected)
+{
+        StepDirStepperAxisConfig cfg = makeStepperCfg();
+        cfg.sensors[0].pin = 21;
+        cfg.sensors[0].role = SensorRole::TravelLimit;
+        cfg.sensors[0].polarity = SensorPolarity::NormallyClosed;
+        cfg.sensors[0].direction = Direction::Forward;
+        cfg.sensors[0].debounceMs = 10;
+        cfg.sensorCount = 1;
+
+        auto r = Axis::createStepDirStepper(cfg);
+        ASSERT_TRUE(r.ok());
+        auto axis = r.takeValue();
+        ASSERT_TRUE(axis->begin().ok());
+        ASSERT_TRUE(axis->enable().ok());
+        axis->service(0);
+        axis->service(50);
+
+        // moveBy(+) is forward → blocked. moveBy(-) is backward → allowed.
+        EXPECT_EQ(axis->moveBy(1000).error(), ErrorCode::LimitActive);
+        EXPECT_TRUE(axis->moveBy(-1000).ok());
+}
+
+TEST(AxisStepDirStepperTest, JogPassesWhenNoLimitConfigured)
+{
+        // Regression: the gate must be a no-op when no TravelLimit
+        // sensor exists. Pre-3.2.x behaviour for this case stays the
+        // same.
+        StepDirStepperAxisConfig cfg = makeStepperCfg();
+        cfg.sensorCount = 0;
+
+        auto r = Axis::createStepDirStepper(cfg);
+        ASSERT_TRUE(r.ok());
+        auto axis = r.takeValue();
+        ASSERT_TRUE(axis->begin().ok());
+        ASSERT_TRUE(axis->enable().ok());
+
+        EXPECT_TRUE(axis->jog(Direction::Forward).ok());
+}
+
 } // namespace

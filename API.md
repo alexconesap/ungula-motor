@@ -630,7 +630,7 @@ In 3.0.0 the actuator returns `ErrorCode::Unsupported` from motion methods when 
 | Role | Path | Use for |
 | --- | --- | --- |
 | `Home` | Polled, debounced | Reference / homing only |
-| `TravelLimit` | Polled, debounced | Soft limits — service-tick reaction |
+| `TravelLimit` | Polled, debounced | Soft limits — service-tick reaction; also gates `moveTo` / `moveBy` / `jog` pre-flight, returning `ErrorCode::LimitActive` if the limit in the requested direction is already asserted |
 | `CrashLimit` | GPIO ISR → `engine.haltFromIsr()` | Hard limits — sub-µs halt |
 | `EmergencyStop` | GPIO ISR → `engine.haltFromIsr()` + latch | E-stop circuits |
 | `Stall` | GPIO ISR with hit-count + arm-delay debounce | TMC2209 DIAG. Reports `StopReason::StallDetected` + `FaultCode::Stall`. During an active homing cycle the Axis treats the stall as a success signal (soft-stop, no fault). |

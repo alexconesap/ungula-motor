@@ -376,6 +376,20 @@ Status Axis::moveTo(Position target, DistanceUnit unit)
         const Position targetSteps = resolved.takeValue();
 
         const Position currentPos = actuator_->feedback().commandedPosition;
+        // Pre-flight TravelLimit gate. Refusing to start motion into an
+        // already-active limit prevents the "drive a few mm into the
+        // switch every service tick" failure mode hosts hit when both
+        // limits happen to be activated simultaneously (e.g. parked on
+        // HOME while END is mechanically held). Zero-distance moves
+        // don't have a meaningful direction; let the planner short-
+        // circuit those normally.
+        if (targetSteps != currentPos) {
+                const Direction requested = (targetSteps > currentPos) ?
+                                                Direction::Forward :
+                                                Direction::Backward;
+                if (sensors_.isActive(SensorRole::TravelLimit, requested))
+                        return Status::Err(ErrorCode::LimitActive);
+        }
         const auto move = planner_.planTo(currentPos, targetSteps, common_.limits,
                                           timerResolutionHz_, timerMinTicks_);
         return armAndStart(move, AxisState::Moving);
@@ -399,7 +413,16 @@ Status Axis::moveBy(Distance delta, DistanceUnit unit)
         if (!resolved.ok())
                 return Status::Err(resolved.error());
 
-        const auto move = planner_.planBy(resolved.takeValue(), common_.limits, timerResolutionHz_,
+        const Distance deltaSteps = resolved.takeValue();
+        // Pre-flight TravelLimit gate — see `moveTo` for rationale.
+        if (deltaSteps != 0) {
+                const Direction requested = (deltaSteps > 0) ?
+                                                Direction::Forward :
+                                                Direction::Backward;
+                if (sensors_.isActive(SensorRole::TravelLimit, requested))
+                        return Status::Err(ErrorCode::LimitActive);
+        }
+        const auto move = planner_.planBy(deltaSteps, common_.limits, timerResolutionHz_,
                                           timerMinTicks_);
         return armAndStart(move, AxisState::Moving);
 }
@@ -418,6 +441,9 @@ Status Axis::jog(Direction direction)
                 return Status::Err(ErrorCode::DriverFault);
         }
 
+        // Pre-flight TravelLimit gate — see `moveTo` for rationale.
+        if (sensors_.isActive(SensorRole::TravelLimit, direction))
+                return Status::Err(ErrorCode::LimitActive);
         constexpr uint32_t kJogSafetySteps = 1'000'000;
         const auto move = planner_.planJog(direction, kJogSafetySteps, common_.limits,
                                            timerResolutionHz_, timerMinTicks_);
@@ -446,6 +472,9 @@ Status Axis::jog(Direction direction, Speed s)
                 return Status::Err(ErrorCode::DriverFault);
         }
 
+        // Pre-flight TravelLimit gate — see `moveTo` for rationale.
+        if (sensors_.isActive(SensorRole::TravelLimit, direction))
+                return Status::Err(ErrorCode::LimitActive);
         constexpr uint32_t kJogSafetySteps = 1'000'000;
         const auto L = limitsForFeed(r.takeValue());
         const auto move = planner_.planJog(direction, kJogSafetySteps, L,
