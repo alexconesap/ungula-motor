@@ -1,504 +1,561 @@
 # UngulaMotor
 
-> **High-performance embedded C++ libraries for ESP32, STM32 and other MCUs** — stepper motor control with autonomous ISR motion and 11-state FSM. Supported targets: ESP32 only.
+> **Embedded C++20 motion control for ESP32 and STM32 (via lib_hal).** Open-loop steppers, STEP/DIR servos, and CAN servos behind a single `Axis` facade.
 
-Stepper motor control for ESP32. Provides autonomous motion with a finite state machine, acceleration ramps, limit switches, stall detection, and an event system — all driven by hardware timer ISRs with no polling required from your main loop.
+The library is built around one rule:
 
-## How it works
+> **Slow application code, slow UART diagnostics, slow event listeners, and slow CAN traffic must never disturb step-pulse timing.**
 
-You create a `LocalMotor`, wire it to an `IMotorDriver` (e.g. `Tmc2209`), call `begin()`, and the motor runs itself. Step pulse generation, acceleration ramps, limit switch monitoring, and stall detection all happen inside timer ISRs. Your application just sends commands (`moveForward()`, `stop()`, `moveTo(...)`) and reacts to events through a small set of stable getters — see [Black-box status getters](#black-box-status-getters).
+Pulse generation lives inside a hardware-timer ISR. Everything else — the main loop, UART register reads to a TMC2209, event listeners, CAN traffic, logging — runs in task context and observes the engine, never commands its timing.
 
-## Minimal project — pins + defaults, just run
+## Table of contents
 
-The motor seeds every motion profile that you did not configure with a safe default at `begin()` time (500 SPS, 500 ms ramp). That means a bare-bones project — driver + pins + `begin()` + `enable()` + `moveForward()` — actually moves at a slow, visible speed without any extra setup. Override any field with `setProfileSpeed/Accel/Decel()` before motion if you want a different feel.
+- [Features](#features)
+- [Supported drives](#supported-drives)
+- [Dependencies](#dependencies)
+- [Architecture](#architecture)
+- [Quick start — open-loop stepper (TMC2209)](#quick-start--open-loop-stepper-tmc2209)
+- [Quick start — STEP/DIR servo](#quick-start--stepdir-servo)
+- [Quick start — limit-switch homing](#quick-start--limit-switch-homing)
+- [The service loop](#the-service-loop)
+- [Events](#events)
+- [Sensors, limits, and safety inputs](#sensors-limits-and-safety-inputs)
+- [TMC2209 driver split](#tmc2209-driver-split)
+- [Faults, stop modes, and recovery](#faults-stop-modes-and-recovery)
+- [Composing axes by hand](#composing-axes-by-hand)
+- [Testing](#testing)
+- [License](#license)
+
+## Features
+
+- **One `Axis` facade for three drive families** — open-loop steppers, STEP/DIR servos, CAN servos. The wire protocol differs; the application code does not.
+- **ISR-driven pulse generation.** Steps are emitted from a hardware-timer ISR off precomputed `MotionSegment` queues. The main loop can block for hundreds of milliseconds without dropping a step.
+- **Integer-only motion planner.** Trapezoidal + triangular profiles, jog, soft-stop ramps. Step count is preserved exactly — no silent drift from rounding.
+- **Typed results everywhere.** `Result<T>` / `Status` instead of `void`/silent failures. No exceptions, no RTTI.
+- **Heap allocation only at boot.** Factories return `Result<std::unique_ptr<Axis>>`; steady-state runtime is allocation-free.
+- **Sensor-aware limits.** `HomeSensor` (polled, debounced), `TravelLimitSensor` (polled), `CrashLimitSensor` and `EmergencyStop` (GPIO interrupt → sub-µs halt of the pulse engine).
+- **Explicit homing FSM.** `Idle → FastApproach → Backoff → SlowApproach → SetHomePosition → Complete/Failed`. No more racing against auto-clearing terminal states.
+- **TMC2209 split into focused components.** `Tmc2209Configurator` (boot config, no reads), `Tmc2209Diagnostics` (opt-in register reads, off motion path), `Tmc2209StallGuard` (DIAG-pin first, optional UART polling). UART traffic is never on the motion timing path.
+- **Bounded event queue.** ISR-safe enqueue, task-context drain. Listeners are dispatched from `service()` — never from ISR.
+
+## Supported drives
+
+| Drive family | Wire protocol | Driver class | Notes |
+| --- | --- | --- | --- |
+| Open-loop stepper (TMC2209, A4988, DRV8825) | STEP + DIR + EN (active-LOW) | `StepDirActuator` | Optional UART configuration via `Tmc2209Configurator` |
+| STEP/DIR servo (Yaskawa, Delta, Leadshine) | STEP + DIR + SVON (typically active-HIGH) + optional ALM / INP | `StepDirActuator` (kind = `StepDirServo`) | Drive owns position truth; encoder feedback wiring deferred |
+| CAN servo (CiA-402, vendor-specific) | CAN bus | `CanServoActuator` + `ICanServoProtocol` | Concrete protocols not bundled — bring your own |
+
+## Dependencies
+
+- **UngulaCore** — `ungula::core::time::millis() / delayUs()`.
+- **UngulaHal** — `gpio` (incl. ISR install), `timer::IHwTimer` + `HwTimer` driver, `uart::Uart` for TMC UART, `can::Can` for CAN servos, `sync::CriticalSection` for the event queue.
+
+No logging dependency inside the motion path. Hosts wire events to their own logger or callback.
+
+### Include reference
+
+The umbrella header pulls in everything you typically need:
 
 ```cpp
-#include <ungula/motor/local_motor.h>
-#include <ungula/motor/drivers/tmc2209.h>
-
-// Driver owns STEP, EN, DIR pins and the UART
-ungula::motor::tmc::Tmc2209 driver(uart, 0.11F, PIN_STEP, PIN_EN, PIN_DIR, /*addr=*/0);
-ungula::motor::LocalMotor mot;
-
-void setup() {
-    mot.setDriver(driver);
-    mot.begin();          // seeds default 500 SPS / 500 ms ramps
-    mot.enable();
-    mot.moveForward();    // starts moving at the default profile
-}
-
-void loop() {
-    // Nothing to do. The motor runs itself.
-}
+#include <ungula/motor.h>
 ```
 
-That is the smallest project that compiles and runs on real hardware. From there, add limits, stall, homing, and faster profiles as the application needs them.
-
-## Realistic project — limits, stall, and a homing strategy
+If you want to keep build dependencies tight, the focused headers are:
 
 ```cpp
-#include <ungula/motor/local_motor.h>
-#include <ungula/motor/drivers/tmc2209.h>
-#include <ungula/motor/homing/limit_switch_homing_strategy.h>
+#include <ungula/motor/axis.h>                          // the facade
+#include <ungula/motor/axis_config.h>                   // config structs
+#include <ungula/motor/events/axis_event.h>             // AxisEvent, listener interface
+#include <ungula/motor/homing/limit_switch_homing_strategy.h>  // homing strategy
 
-ungula::motor::tmc::Tmc2209 driver(uart, 0.11F, PIN_STEP, PIN_EN, PIN_DIR, /*addr=*/0);
-ungula::motor::LocalMotor mot;
-
-ungula::motor::LimitSwitchHomingStrategy::Config homingCfg;
-ungula::motor::LimitSwitchHomingStrategy homing(homingCfg);
-
-void setup() {
-    mot.setDriver(driver);
-    mot.setRunCurrent(1100);
-    mot.setMicrosteps(16);
-    mot.setStepsPerMm(200.0F);
-
-    // Limits (NC by default; pass invertPolarity=true for NO wiring)
-    mot.addLimitBackward(PIN_HOME);   // index 0 on the BACKWARD side
-    mot.addLimitForward(PIN_END);     // index 0 on the FORWARD side
-
-    // Stall behaviour — motor goes to FSM Stall and stops on detection
-    mot.setAutoStopOnStall(true);
-
-    // Profiles — override the defaults for a faster jog
-    mot.setProfileSpeed(ungula::motor::MotionProfile::JOG, 10000);
-    mot.setProfileAccel(ungula::motor::MotionProfile::JOG, 500);
-
-    // Homing strategy
-    homingCfg.homingDirection = ungula::motor::Direction::BACKWARD;
-    homingCfg.fastSpeedSps    = 3000;
-    homingCfg.slowSpeedSps    = 500;
-    homingCfg.backoffSteps    = 300;
-    mot.setHomingStrategy(&homing);
-    mot.setHomingTimeout(10000);
-
-    mot.begin();
-    mot.enable();
-}
-
-void loop() {
-    // Do the application's work. Nothing motor-specific belongs here.
-}
-
-void onJogForward() {
-    mot.setActiveProfile(ungula::motor::MotionProfile::JOG);
-    mot.moveForward();
-}
-void onStop() { mot.stop(); }
-void onHome() { mot.home(); }
+// TMC2209 (only when you want UART configuration):
+#include <ungula/hal/uart/uart.h>
+#include <ungula/motor/drivers/tmc2209/tmc2209_configurator.h>
+#include <ungula/motor/drivers/tmc2209/tmc2209_diagnostics.h>
+#include <ungula/motor/drivers/tmc2209/tmc2209_stallguard.h>
+#include <ungula/motor/drivers/tmc2209/tmc2209_hal_uart.h>
 ```
 
 ## Architecture
 
 ```text
-┌─────────────────────────────────────────────────────┐
-│  Application                                        │
-│  (HTTP handlers, protocol, UI)                      │
-└────────────────────┬────────────────────────────────┘
-                     │ IMotor interface
-         ┌───────────┴───────────┐
-         │                       │
-   LocalMotor              RemoteMotor
-   (real hardware)         (proxy over transport)
-         │
-         ├── StepGenerator    GPTimer ISR for step pulses + ramp
-         ├── MotorFsm         11-state machine with event publishing
-         ├── LimitSwitch[]    Debounced, checked every 10 ms
-         └── IMotorDriver     Hardware abstraction
-               │
-           Tmc2209            UART register access, stall detection
-           (or any driver)
+ungula::motor
+├── Axis                              -- user-facing facade (owns the three below)
+│    ├── std::unique_ptr<IHwTimer>    -- from lib_hal
+│    ├── std::unique_ptr<IPulseEngine>
+│    │    ├── HalPulseEngine          -- production; timer-ISR-driven
+│    │    └── FakePulseEngine         -- header-only test fake
+│    └── std::unique_ptr<IAxisActuator>
+│         ├── StepDirActuator         -- open-loop + STEP/DIR servo
+│         └── CanServoActuator        -- CAN drives (skeleton; needs ICanServoProtocol)
+│
+├── MotionPlanner                     -- stateless; integer trapezoidal/triangular
+├── SensorBank                        -- polled + ISR sensor service
+├── HomingController + IHomingStrategy
+│    └── LimitSwitchHomingStrategy
+├── AxisEventQueue                    -- bounded; ISR-safe enqueue, task drain
+│
+└── drivers/tmc2209/
+     ├── ITmcUart                     -- transport abstraction
+     │    ├── Tmc2209HalUart          -- lib_hal Uart adapter (CRC, framing)
+     │    └── FakeTmcUart             -- test fake (register file in memory)
+     ├── Tmc2209Configurator          -- boot config; no reads
+     ├── Tmc2209Diagnostics           -- opt-in reads, off motion path
+     └── Tmc2209StallGuard            -- DIAG-pin + optional SG_RESULT polling
 ```
 
-**LocalMotor** is the real thing — it generates step pulses via a hardware timer ISR and monitors safety (limits, stalls) via a 10 ms software timer. After `begin()`, it needs zero attention from your main loop.
+`Axis` is the only type most applications need. The factories validate the config, allocate the underlying components, and return a fully wired axis ready for `begin()`.
 
-**RemoteMotor** implements the same `IMotor` interface but sends commands through an `IMotorCommandSink` (ESP-NOW, UART, whatever). Useful when one board controls a motor on another board.
+## Quick start — open-loop stepper (TMC2209)
 
-**MotorCoordinator** manages multiple `IMotor` instances for multi-axis systems.
-
-## Black-box status getters
-
-The host should never need to reason about which FSM state the motor is currently in. Every question worth asking has a stable getter that survives the FSM's auto-clear of the soft terminal states (`TargetReached`, `LimitReached`):
-
-| Question | Getter | Notes |
-| --- | --- | --- |
-| Is the motor running? | `isMoving()` | True for `Starting`, `RunningForward`, `RunningBackward`, `Decelerating`, `WaitingStart`. |
-| Is it idle? | `isIdle()` | True only for FSM `Idle`. False while moving and false in `Stall` / `Fault` (the host has not acknowledged yet). |
-| Is it stalling? | `isStalling()` | Either the driver is asserting stall right now, or the FSM is latched in `Stall` waiting for `clearStall()`. |
-| Why did the last motion end? | `lastStopReason()` | Returns a `StopReason`. Latched on the motion-ending event and kept across the FSM auto-clear. Reset to `None` on the next motion command. |
-| Did a limit cause the stop? | `wasLimitHit()` | Sticky — auto-clears once the axis moves again *and* every limit has released. |
-| Is limit N currently asserted? | `isLimitActive(dir, index)` | Per-switch query. `isLimitActive(dir)` answers "any switch on that side". `limitCount(dir)` for iterating. |
-| Is a homing run in progress? | `isHoming()` | Goes false on success, failure, user stop, e-stop, or watchdog. |
-| Is the axis homed? | `isHomed()` | True after a successful homing run. Seeded at `begin()` from limit-switch strategies; always false at boot for stall strategies. |
-
-### `StopReason` values
-
-| Value | Meaning |
-| --- | --- |
-| `None` | No motion has run yet, or one is in progress. |
-| `TargetReached` | A `moveTo` / `moveBy` / profile move completed cleanly. |
-| `UserStop` | `stop()` was called and the deceleration ramp finished. |
-| `LimitHit` | A limit switch fired during motion. |
-| `Stall` | The driver reported a stall. |
-| `Fault` | A hardware fault was raised. |
-| `EmergencyStop` | `emergencyStop()` was called. |
-| `Disabled` | `disable()` was called. |
-
-`stopReasonName(reason)` returns the human-readable name for logs.
-
-### Status query cookbook
+The canonical setup: ESP32 + TMC2209 + NEMA17 stepper.
 
 ```cpp
+#include <Arduino.h>
+
 #include <ungula/motor.h>
+#include <ungula/hal/uart/uart.h>
+#include <ungula/motor/drivers/tmc2209/tmc2209_configurator.h>
+#include <ungula/motor/drivers/tmc2209/tmc2209_hal_uart.h>
 
-// "Is the motor idle because it just completed a move, or because the
-//  user pressed stop, or because it stalled?"
-if (mot.isIdle()) {
-    switch (mot.lastStopReason()) {
-        case ungula::motor::StopReason::TargetReached: handleCycleComplete(); break;
-        case ungula::motor::StopReason::UserStop:      handleUserCancel();    break;
-        case ungula::motor::StopReason::Stall:         handleStallRecovery(); break;
-        case ungula::motor::StopReason::LimitHit:      handleLimitRecovery(); break;
-        case ungula::motor::StopReason::Fault:         handleFault();         break;
-        default: /* None / Disabled / EmergencyStop — nothing to do */ break;
-    }
-}
+using namespace ungula::motor;
 
-// "Is limit switch 0 on the backward side closed right now?"
-if (mot.isLimitActive(ungula::motor::Direction::BACKWARD, 0)) {
-    showHomeIndicator();
-}
-
-// "Sweep every registered limit on the forward side."
-for (int32_t i = 0; i < mot.limitCount(ungula::motor::Direction::FORWARD); ++i) {
-    if (mot.isLimitActive(ungula::motor::Direction::FORWARD, i)) {
-        // ...
-    }
-}
-
-// "Is anything happening on the motor right now that should block a new
-//  move command?"
-const bool busy = mot.isMoving() || mot.isHoming() || mot.isStalling();
-```
-
-Stall and Fault still require an explicit `clearStall()` / `clearFault()` from the host — that is intentional, the operator must acknowledge before the FSM accepts new commands. `emergencyStop()` is the override: it forces the FSM back to `Idle` from any reachable state.
-
-## IMotorDriver — writing your own driver
-
-The driver interface handles everything between the ESP32 and the motor driver chip. Pins, registers, communication protocol — all behind this wall.
-
-```cpp
-#include <ungula/motor.h>
-
-class IMotorDriver {
-public:
-    virtual void begin() = 0;                        // init GPIO, UART, registers
-    virtual void enable() = 0;                       // energise the motor
-    virtual void disable() = 0;                      // de-energise
-    virtual void setDirection(Direction dir) = 0;     // FORWARD or BACKWARD
-    virtual uint8_t stepPin() const = 0;             // which GPIO gets step pulses
-    virtual void setDirectionInverted(bool inv) = 0; // swap direction without rewiring
-    virtual void setMicrosteps(uint16_t ms) = 0;
-    virtual void setRunCurrent(uint16_t mA) = 0;
-    virtual bool isStalling() const = 0;             // driver's verdict
-    virtual void clearStall() = 0;
-
-    // Optional — override if your driver supports stall detection
-    virtual void prepareStallDetection(int32_t speedSps, uint32_t accelMs) {}
-    virtual void updateStallDetectionSpeed(int32_t speedSps) {}
-    virtual void serviceStallDetection() {}
-
-    // Optional — override if your driver supports status registers
-    virtual uint32_t drvStatus() { return 0; }
-    virtual uint8_t version() { return 0; }
-};
-```
-
-The motor controller never touches GPIO directly. It calls the driver for everything, which means you can swap a TMC2209 for a DRV8825 or an A4988 without touching motor logic.
-
-Stall detection follows a strict split: the driver detects (DIAG pin, SG registers, back-EMF — whatever the chip supports). The motor decides what to do about it (stop, retry, notify).
-
-## TMC2209 driver
-
-The included `Tmc2209` driver talks directly to the chip over UART — no TMCStepper Arduino library needed. It handles register-level communication, current scaling, microstepping, and dual-path stall detection (DIAG pin + SG_RESULT register).
-
-```cpp
-#include <ungula/motor/drivers/tmc2209.h>
-
-// UART must be set up separately
-ungula::hal::uart::Uart tmcUart(2);
-tmcUart.begin(115200, PIN_TX, PIN_RX);
-
-// Driver owns STEP, EN, DIR pins
-ungula::motor::tmc::Tmc2209 driver(tmcUart, 0.11F, PIN_STEP, PIN_EN, PIN_DIR);
-
-// Configure stall detection (optional, all-in-one)
-driver.configureStall({
-    .diagPin = PIN_DIAG,
-    .sensitivity = 40,
-    .diagConfirmCount = 8,
-    .sgSlope = 0.17F,
-    .sgMaxBaseline = 300,
-    .sgDropFraction = 0.65F,
-    .sgConfirmCount = 10,
-});
-
-driver.begin();
-```
-
-## Motor FSM states
-
-The motor goes through 11 states automatically. `Decelerating` collapses straight to `Idle` once the ramp reaches zero — there is no separate "Stopped" stage. Soft terminal states (`TargetReached`, `LimitReached`) are auto-cleared back to `Idle` by the service timer one tick after they're observable. Hard terminal states (`Stall`, `Fault`) require an explicit `clearStall()` / `clearFault()` acknowledgement so the host actively decides to recover.
-
-| State | Auto-clears? | Meaning |
-| --- | --- | --- |
-| `Disabled` | — | Driver output stage off. Call `enable()` to move to Idle. |
-| `Idle` | — | Ready for commands. |
-| `WaitingStart` | — | Profile loaded, waiting for `startTimeMs`. |
-| `Starting` | — | Ramping up. |
-| `RunningForward` | — | At target speed, forward. |
-| `RunningBackward` | — | At target speed, backward. |
-| `Decelerating` | → `Idle` | Ramping down after `stop()`. |
-| `TargetReached` | → `Idle` | Positional move completed (visible for one service tick). |
-| `LimitReached` | → `Idle` | Limit switch triggered (visible for one service tick). |
-| `Stall` | needs `clearStall()` | Stall detected — host acknowledges. |
-| `Fault` | needs `clearFault()` | Hardware fault — host acknowledges. |
-
-`emergencyStop()` is the heavy hammer — it reaches `Idle` from any reachable state, including `Stall` and `Fault`, bypassing the explicit acknowledgement (because if the operator hits e-stop they don't care why the motor stopped, only that it does).
-
-## Events
-
-Subscribe to motor events to react without polling:
-
-```cpp
-#include <ungula/motor.h>
-
-class MyListener : public ungula::motor::IMotorEventListener {
-public:
-    void onMotorEvent(const ungula::motor::MotorEvent& event) override {
-        if (event.type == ungula::motor::MotorEventType::LimitSwitchHit) {
-            // handle limit
-        }
-    }
-};
-
-MyListener listener;
-mot.subscribe(&listener);
-```
-
-Events are delivered synchronously from the 10 ms service timer — keep handlers fast and non-blocking.
-
-## Motion profiles
-
-Three named profiles let you store different speed/ramp combinations:
-
-```cpp
-#include <ungula/motor.h>
-
-// Fast jog for manual positioning
-mot.setProfileSpeed(ungula::motor::MotionProfile::JOG, 15000);
-mot.setProfileAccel(ungula::motor::MotionProfile::JOG, 300);
-
-// Slow homing toward limit switch
-mot.setProfileSpeed(ungula::motor::MotionProfile::HOMING, 2000);
-mot.setProfileAccel(ungula::motor::MotionProfile::HOMING, 500);
-
-// Production cycle speed
-mot.setProfileSpeed(ungula::motor::MotionProfile::CYCLE, 8000);
-mot.setProfileAccel(ungula::motor::MotionProfile::CYCLE, 400);
-mot.setProfileDecel(ungula::motor::MotionProfile::CYCLE, 200);
-
-// Select which profile is active
-mot.setActiveProfile(ungula::motor::MotionProfile::JOG);
-mot.moveForward();  // uses JOG speed and ramp
-```
-
-## Positional moves
-
-```cpp
-#include <ungula/motor.h>
-
-// Move to absolute position (in steps, mm, cm, or degrees)
-mot.moveTo(1500.0F, ungula::motor::DistanceUnit::STEPS);
-mot.moveTo(25.0F, ungula::motor::DistanceUnit::MM);
-
-// Move relative
-mot.moveBy(-10.0F, ungula::motor::DistanceUnit::MM);
-```
-
-The step generator handles position tracking at ISR level with zero overshoot.
-
-## Speed-proportional run current (optional)
-
-TMC2209-class drivers can change run current at runtime over UART. When the mechanical load varies with speed — a vertical axis holding weight at a slow process move, a rotary axis that only needs torque when accelerating — you can install a linear current-vs-speed curve on `LocalMotor` so the driver current tracks the commanded SPS. Disabled by default, so existing projects are unaffected.
-
-```cpp
-#include <ungula/motor.h>
-
-// High torque at low speed (vertical axis holding a hot die assembly).
-ungula::motor::CurrentCurve curve;
-curve.minSps = 200;
-curve.maxSps = 3000;
-curve.minMa  = 1300;   // slow → more current
-curve.maxMa  = 900;    // fast → back off
-
-mot.setCurrentCurve(curve);
-mot.setCurrentCurveEnabled(true);
-```
-
-The motor calls `driver.setRunCurrent(mA)` on every commanded speed change (`moveForward`, `moveTo`, `updateSpeed`, etc.) using linear interpolation between `minSps/minMa` and `maxSps/maxMa`. Speeds outside that range clamp to the nearest endpoint. Works with any driver that honours `setRunCurrent()` — the mechanism lives in `LocalMotor`, not the driver, so a future DAC-on-VREF DRV8825 driver could use the same curve without changes here.
-
-## Homing
-
-Homing is a multi-step dance (approach → stop signal → back off → slow re-approach → zero) and different machines use different stop signals: a mechanical hard stop read via stall detection, a limit switch, an optical sensor, an encoder index pulse. The homing logic is **inside `LocalMotor`** — the application just installs a strategy at setup and calls `motor.home()`. No loop polling, no runner to tick.
-
-### Black-box API
-
-`LocalMotor` exposes a single non-blocking `home()` plus the homing-related flags from the [Black-box status getters](#black-box-status-getters) table above (`isHoming`, `isHomed`, `wasLimitHit`). Nothing else about the FSM needs to leak.
-
-| Method | Meaning |
-| --- | --- |
-| `motor.home()` | Kick off homing using the installed strategy. Non-blocking. Cancels any in-progress motion first. |
-
-```cpp
-#include <ungula/motor/homing/limit_switch_homing_strategy.h>
-
-ungula::motor::LimitSwitchHomingStrategy::Config cfg;
-cfg.homingDirection = ungula::motor::Direction::BACKWARD;
-cfg.fastSpeedSps    = 3000;
-cfg.slowSpeedSps    = 500;
-cfg.backoffSteps    = 300;
-
-ungula::motor::LimitSwitchHomingStrategy strategy(cfg);
+ungula::hal::uart::Uart       tmcUart(1);
+tmc2209::Tmc2209HalUart       tmcTransport(tmcUart, /*slaveAddress=*/0);
+tmc2209::Tmc2209Configurator  tmcConfig(tmcTransport);
+std::unique_ptr<Axis>         axis;
 
 void setup() {
-    // ... driver wiring, profiles, limits ...
-    mot.setHomingStrategy(&strategy);
-    mot.setHomingTimeout(10000);   // 0 = no watchdog; strategy decides
-    mot.begin();                   // seeds isHomed() from strategy.isAtHomeReference()
-    mot.enable();
-}
+    Serial.begin(115200);
 
-void onHomeButton() {
-    mot.home();                    // fire and forget
-}
+    // 1) UART (host owns this — the TMC driver only borrows the bus).
+    tmcUart.begin(/*baud=*/115200, /*tx=*/17, /*rx=*/16);
 
-void onStartCycle() {
-    if (!mot.isHomed()) { reportError(); return; }
-    mot.moveTo(25.0F, ungula::motor::DistanceUnit::MM);
+    // 2) TMC2209 boot config — currents, microsteps, chopper, GSTAT clear.
+    tmc2209::Tmc2209Configurator::Config tc;
+    tc.runCurrent  = 16;          // 0..31 (scaled by Vref + sense resistor)
+    tc.holdCurrent = 8;
+    tc.microsteps  = tmc2209::Microsteps::Sixteenth;
+    tc.mode        = tmc2209::ChopperMode::StealthChop;
+    tmcConfig.begin(tc);          // returns Status; check it in production code
+
+    // 3) The axis.
+    StepDirStepperAxisConfig cfg;
+    cfg.common.axisId            = AxisId(0);
+    cfg.common.units.stepsPerMm  = 80.0f;
+    cfg.common.limits.maxVelocitySps = 8000;
+    cfg.common.limits.accelSpsPerSec = 20000;
+    cfg.common.limits.decelSpsPerSec = 20000;
+    cfg.common.limits.maxStepRateSps = 200000;
+    cfg.stepPin   = StepPin{18};
+    cfg.dirPin    = DirectionPin{19};
+    cfg.enablePin = EnablePin{21};       // active-LOW for TMC2209
+
+    auto r = Axis::createStepDirStepper(cfg);
+    if (!r.ok()) { Serial.println("axis factory failed"); return; }
+    axis = r.takeValue();
+
+    axis->begin();
+    axis->enable();
 }
 
 void loop() {
-    if (!mot.isMoving() && !mot.isHoming()) {
-        project_state_ = State::Idle;  // all motion done, back to idle
+    axis->service(millis());
+
+    if (axis->state() == AxisState::Idle) {
+        axis->moveBy(3200);              // 1 revolution at 16x microsteps
     }
 }
 ```
 
-`stop()` and `emergencyStop()` automatically abort any in-progress homing — the host never needs to coordinate between "stop the motor" and "stop the homing sequence".
+The pulse engine begins emitting steps the moment `moveBy` arms it. The main loop only calls `service(millis())` — pulse timing is entirely inside the timer ISR.
 
-### Strategies
+The full version of this sketch is in [`examples/stepper_tmc2209_internal_pulse/`](examples/stepper_tmc2209_internal_pulse/).
 
-The strategy decides HOW to find the reference. Same motor, different strategy in different projects. The strategy talks only to `IHomeableMotor` (the motor extended with the few hooks it needs — profile setters, clear-stall/fault, reset-position, peek-at-limit). That's how strategies get unit-tested against a mock with no hardware.
+## Quick start — STEP/DIR servo
 
-**Stall homing** — no limit switch, drive into a hard mechanical stop and read the driver's stall signal (TMC2209 StallGuard, DIAG pin, etc.). The strategy forces `setAutoStopOnStall(true)` in `begin()` so the FSM actually transitions to `Stall` on detection.
+Same wire protocol, different defaults: active-HIGH SVON, optional ALM and INP digital inputs.
 
 ```cpp
-#include <ungula/motor/homing/stall_homing_strategy.h>
+#include <Arduino.h>
 
-ungula::motor::StallHomingStrategy::Config cfg;
-cfg.homingDirection = ungula::motor::Direction::BACKWARD;
-cfg.fastSpeedSps    = 2000;
-cfg.slowSpeedSps    = 500;
-cfg.backoffSteps    = 200;
-cfg.finalApproach   = true;  // false = single-touch, faster but less repeatable
+#include <ungula/motor.h>
 
-ungula::motor::StallHomingStrategy strategy(cfg);
-mot.setHomingStrategy(&strategy);
+using namespace ungula::motor;
+
+std::unique_ptr<Axis> axis;
+
+void setup() {
+    StepDirServoAxisConfig cfg;
+    cfg.common.axisId                = AxisId(0);
+    cfg.common.units.stepsPerMm      = 1000.0f;     // 10000 pulses/rev, 10 mm lead
+    cfg.common.limits.maxVelocitySps = 100000;
+    cfg.common.limits.accelSpsPerSec = 500000;
+    cfg.common.limits.decelSpsPerSec = 500000;
+    cfg.common.limits.maxStepRateSps = 500000;
+
+    cfg.stepPin            = StepPin{18};
+    cfg.dirPin             = DirectionPin{19};
+    cfg.enablePin          = EnablePin{21};         // SVON
+    cfg.alarmInputPin      = InputPin{34};          // optional
+    cfg.inPositionInputPin = InputPin{35};          // optional
+    cfg.dirActiveHigh   = true;
+    cfg.enableActiveLow = false;                    // servos use active-HIGH
+    cfg.dirSetupUs      = 10;                       // industrial drives want margin
+
+    // Wire ALM as a CrashLimit sensor so a drive fault halts the
+    // pulse engine from the GPIO ISR — sub-µs latency.
+    cfg.sensors[0].pin       = 34;
+    cfg.sensors[0].role      = SensorRole::CrashLimit;
+    cfg.sensors[0].polarity  = SensorPolarity::NormallyClosed;
+    cfg.sensors[0].direction = Direction::Forward;
+    cfg.sensorCount          = 1;
+
+    auto r = Axis::createStepDirServo(cfg);
+    axis  = r.takeValue();
+
+    axis->begin();
+    axis->enable();
+    delay(100);                                     // SRV-ON settle time
+}
+
+void loop() {
+    axis->service(millis());
+    if (axis->state() == AxisState::Idle) {
+        axis->moveBy(10000);                        // 10 mm at 1000 steps/mm
+    }
+}
 ```
 
-Stall-based homing has no steady-state signal, so `isHomed()` always starts false after a reboot — the caller must run `home()` before trusting position.
+Full sketch in [`examples/step_dir_servo/`](examples/step_dir_servo/).
 
-**Limit-switch homing** — real limit switch registered on the motor via `addLimitBackward(pin)` or `addLimitForward(pin)` matching `homingDirection`. The strategy never reads the GPIO directly; `LocalMotor` owns debouncing and the FSM reports `LimitReached` on its own. Because the switch state is a steady-state signal, limit-switch homing can seed `isHomed()` at `begin()` time: if the axis happens to be sitting on the switch after a reboot, the motor already knows it's at home.
+## Quick start — limit-switch homing
 
-### Parallel multi-axis homing
+Add a home reference switch on GPIO 34 and a homing strategy. `Axis::home()` runs the 7-state FSM until the strategy reports Complete or Failed.
 
-Each motor owns its own homing run, so coordinating two axes is just two calls and two flags:
+```cpp
+#include <Arduino.h>
+
+#include <ungula/motor.h>
+#include <ungula/motor/homing/limit_switch_homing_strategy.h>
+
+using namespace ungula::motor;
+
+std::unique_ptr<Axis> axis;
+
+LimitSwitchHomingStrategy::Config makeHomingCfg() {
+    LimitSwitchHomingStrategy::Config c;
+    c.approachDirection = Direction::Backward;     // home is in -direction
+    c.fastFeedSps       = 2000;
+    c.slowFeedSps       = 200;                     // ×10 slower for repeatability
+    c.backoffSteps      = 200;
+    c.homePositionSteps = 0;
+    return c;
+}
+LimitSwitchHomingStrategy strategy(makeHomingCfg());
+
+void setup() {
+    StepDirStepperAxisConfig cfg;
+    cfg.common.axisId            = AxisId(0);
+    cfg.common.units.stepsPerMm  = 80.0f;
+    cfg.common.limits.maxVelocitySps = 8000;
+    cfg.common.limits.accelSpsPerSec = 20000;
+    cfg.common.limits.decelSpsPerSec = 20000;
+    cfg.common.limits.maxStepRateSps = 200000;
+    cfg.stepPin   = StepPin{18};
+    cfg.dirPin    = DirectionPin{19};
+    cfg.enablePin = EnablePin{21};
+
+    // Wire the home switch — normally-closed, fail-safe.
+    cfg.sensors[0].pin        = 34;
+    cfg.sensors[0].role       = SensorRole::Home;
+    cfg.sensors[0].polarity   = SensorPolarity::NormallyClosed;
+    cfg.sensors[0].direction  = Direction::Backward;
+    cfg.sensors[0].debounceMs = 20;
+    cfg.sensorCount           = 1;
+
+    axis = Axis::createStepDirStepper(cfg).takeValue();
+    axis->begin();
+    axis->enable();
+    axis->setHomingStrategy(&strategy, /*timeoutMs=*/30000);
+    axis->home();                                  // returns immediately; runs async
+}
+
+void loop() {
+    axis->service(millis());                       // drives the homing FSM
+
+    static bool didFirstMove = false;
+    if (!didFirstMove && axis->isHomed()) {
+        didFirstMove = true;
+        axis->moveTo(1600);                        // absolute, from home
+    }
+}
+```
+
+Full sketch in [`examples/limit_switch_homing/`](examples/limit_switch_homing/).
+
+## The service loop
+
+The host calls `Axis::service(nowMs)` from a regular task tick. **1 ms is typical; 10 ms is acceptable for low-speed work.** A single `service()` call:
+
+1. Polls debounced sensors (Home, TravelLimit) and consumes ISR-latched ones (CrashLimit, EmergencyStop).
+2. Halts motion when a TravelLimit in the current move's direction activates, or when a Home sensor fires during a homing cycle.
+3. Detects engine motion-complete transitions and emits `MotionCompleted` / `MotionStopped`.
+4. Ticks the homing controller — drives the strategy's FSM through its phases.
+5. Drains the event queue and dispatches to listeners from task context.
+
+```cpp
+void loop() {
+    axis->service(millis());
+    // ... your own work ...
+}
+```
+
+The pulse engine is **not** dependent on `service()` running on time. If the loop blocks for 500 ms, the engine keeps stepping; the missed time only delays event delivery and limit-switch reaction (CrashLimit/EmergencyStop still halt the engine instantly through their GPIO ISR).
+
+### Raw ESP-IDF `app_main` — yield the task
+
+If you call `service()` from a raw `app_main` loop (not Arduino's `loop()`, which the framework yields implicitly), you must yield the task yourself. Otherwise the main task pins one core at 100%, `IDLE0` never runs, and the task watchdog trips after ~5 s:
+
+```cpp
+#include <ungula/core/time/time.h>
+
+extern "C" void app_main(void) {
+    setup();
+    for (;;) {
+        axis->service(ungula::core::time::millis());
+        // One scheduler tick — guaranteed to feed the watchdog.
+        ungula::core::time::yield();
+    }
+}
+```
+
+**Use `yield()`, not `delay(N)`.** The right minimum-blocking duration depends on the target's scheduler tick:
+
+- Stock ESP-IDF runs FreeRTOS at 100 Hz → 1 tick = **10 ms**. `pdMS_TO_TICKS(1..9)` rounds *down* to zero ticks; `vTaskDelay(0)` only does a `taskYIELD()` that can't reach `IDLE0` (priority 0 vs main's priority 1), so the watchdog still starves.
+- If you raise `CONFIG_FREERTOS_HZ` to 1000, 1 tick = **1 ms** — and `yield()` blocks for that instead.
+
+`yield()` knows the tick from the platform header and always blocks for exactly one tick — no magic millisecond constant in your code. On the host backend it maps to `std::this_thread::yield()`, which is correct for host tests (no watchdog to feed).
+
+If you need a *specific* cadence (e.g. 5 ms periodic sampling decoupled from the FreeRTOS tick), use `delayUntilMs()` with a value that rounds to ≥ 1 tick. The pulse engine doesn't care about service cadence — it lives in the timer ISR and runs autonomously. The cadence only affects sensor debounce latency and homing FSM responsiveness.
+
+## Events
+
+Subscribe a listener; events arrive at `service()`-drain time, never from ISR.
+
+```cpp
+#include <Arduino.h>
+
+#include <ungula/motor.h>
+
+using namespace ungula::motor;
+
+class PrintingListener final : public IAxisEventListener {
+public:
+    void onAxisEvent(const AxisEvent& ev) override {
+        Serial.printf("[%lu] axis %u  %s  state=%s  pos=%ld  reason=%s  fault=%s\n",
+                      static_cast<unsigned long>(ev.timestampMs),
+                      ev.axisId.value,
+                      axisEventTypeToString(ev.type),
+                      axisStateToString(ev.state),
+                      static_cast<long>(ev.commandedPosition),
+                      stopReasonToString(ev.stopReason),
+                      faultToString(ev.faultCode));
+    }
+};
+PrintingListener listener;
+
+// inside setup():
+//   axis->subscribe(&listener);
+```
+
+Event types emitted by the Axis:
+
+| Event | Trigger |
+| --- | --- |
+| `StateChanged` | Any FSM transition |
+| `MotionStarted` | `moveTo` / `moveBy` / `jog` armed the engine |
+| `MotionCompleted` | Engine reported `TargetReached` |
+| `MotionStopped` | Engine stopped before reaching target (user stop, limit, fault) |
+| `LimitActivated` | Crash/E-stop ISR fired, or travel-limit in direction activated |
+| `HomingStarted` | `home()` accepted; controller is `FastApproach` |
+| `HomingCompleted` | Controller reached `Complete` |
+| `HomingFailed` | Controller reached `Failed` (timeout, stuck switch, etc.) |
+| `FaultRaised` | Driver fault, pulse-engine fault, or limit/estop fault |
+| `FaultCleared` | `clearFault()` succeeded |
+| `EmergencyStopped` | `emergencyStop()` or E-stop input fired |
+
+The listener slot count is fixed at compile time (`MAX_AXIS_EVENT_LISTENERS`, default 4). The event queue capacity is the template parameter on `AxisEventQueue<N>` (default 32).
+
+## Sensors, limits, and safety inputs
+
+`SensorRole` distinguishes the four kinds of switches. They have **different** timing and safety semantics — keep them separate.
+
+| Role | Path | Use for |
+| --- | --- | --- |
+| `Home` | Polled with `debounceMs` filter | Reference / homing only |
+| `TravelLimit` | Polled with debounce | Soft limits that should halt motion at the service tick |
+| `CrashLimit` | **GPIO ISR** → `engine.haltFromIsr()` | Hard limit that must stop the motor immediately |
+| `EmergencyStop` | **GPIO ISR** → `engine.haltFromIsr()` + latch | E-stop circuit (palm button, door switch, gate) |
+
+The `CrashLimit` and `EmergencyStop` ISR path is sub-microsecond: the GPIO ISR calls `IPulseEngine::haltFromIsr()` directly, which disarms the hardware timer and latches the fault. Bookkeeping (event emission, state transition) happens at the next `service()` tick from task context.
+
+```cpp
+SensorInputConfig sensors[3];
+// Home reference — polled, debounced.
+sensors[0].pin       = 34;
+sensors[0].role      = SensorRole::Home;
+sensors[0].polarity  = SensorPolarity::NormallyClosed;
+sensors[0].direction = Direction::Backward;
+sensors[0].debounceMs = 20;
+
+// Travel limit on the positive side — polled.
+sensors[1].pin       = 35;
+sensors[1].role      = SensorRole::TravelLimit;
+sensors[1].polarity  = SensorPolarity::NormallyClosed;
+sensors[1].direction = Direction::Forward;
+
+// Hardware E-stop — ISR-driven.
+sensors[2].pin       = 32;
+sensors[2].role      = SensorRole::EmergencyStop;
+sensors[2].polarity  = SensorPolarity::NormallyClosed;
+
+cfg.sensors[0]  = sensors[0];
+cfg.sensors[1]  = sensors[1];
+cfg.sensors[2]  = sensors[2];
+cfg.sensorCount = 3;
+```
+
+`NormallyClosed` is the default convention for safety inputs: a cut or disconnected wire reads as "pressed" (fail-safe).
+
+## TMC2209 driver split
+
+The TMC2209 driver lives in `motor/drivers/tmc2209/` and is split into three single-responsibility components:
+
+| Component | Responsibility | UART traffic |
+| --- | --- | --- |
+| `Tmc2209Configurator` | Boot config (currents, microsteps, chopper, mode, GSTAT clear) | Writes only, during boot |
+| `Tmc2209Diagnostics` | Opt-in `DRV_STATUS` / `IOIN` / `GSTAT` snapshot + on-demand reads | Off motion path |
+| `Tmc2209StallGuard` | SGTHRS / TCOOLTHRS config, opt-in SG_RESULT read | DIAG-pin is the default detection path |
+
+```cpp
+#include <ungula/hal/uart/uart.h>
+#include <ungula/motor/drivers/tmc2209/tmc2209_configurator.h>
+#include <ungula/motor/drivers/tmc2209/tmc2209_diagnostics.h>
+#include <ungula/motor/drivers/tmc2209/tmc2209_stallguard.h>
+#include <ungula/motor/drivers/tmc2209/tmc2209_hal_uart.h>
+
+ungula::hal::uart::Uart            uart(1);
+ungula::motor::tmc2209::Tmc2209HalUart      transport(uart, /*slaveAddress=*/0);
+ungula::motor::tmc2209::Tmc2209Configurator config(transport);
+ungula::motor::tmc2209::Tmc2209Diagnostics  diag(transport);
+ungula::motor::tmc2209::Tmc2209StallGuard   sg(transport);
+
+void setup() {
+    uart.begin(115200, /*tx=*/17, /*rx=*/16);
+
+    ungula::motor::tmc2209::Tmc2209Configurator::Config c;
+    c.runCurrent  = 16;
+    c.holdCurrent = 8;
+    c.microsteps  = ungula::motor::tmc2209::Microsteps::Sixteenth;
+    c.mode        = ungula::motor::tmc2209::ChopperMode::StealthChop;
+    config.begin(c);
+
+    // Optional StallGuard — fully off the motion path. The chip
+    // pulses its DIAG output when a stall is detected; wire DIAG
+    // to a CrashLimit sensor on the Axis side.
+    ungula::motor::tmc2209::Tmc2209StallGuard::Config sCfg;
+    sCfg.sgThreshold = 10;
+    sCfg.tCoolThrs   = 0x1000;
+    sg.begin(sCfg);
+}
+
+void diagnoseFromLowPriorityTask() {
+    // Diagnostics are never called from the motion path. Run this
+    // from a 100 ms-ish task or on-demand after a fault event.
+    if (diag.refresh().ok()) {
+        if (diag.snapshot().driveFault()) {
+            // Drive reports overtemperature, short, etc.
+        }
+    }
+}
+```
+
+`Tmc2209Configurator::clearGstat()` writes the W1C mask. The original driver had a read-instead-of-write bug here that left flags latched after boot; the regression test (`test_tmc2209_configurator.cpp`) locks the correct behaviour.
+
+## Faults, stop modes, and recovery
+
+```cpp
+enum class StopMode : uint8_t {
+    Decelerate,  // not implemented in 3.0.0 — returns Unsupported
+    Immediate,   // halt on next ISR boundary; no decel ramp
+    Emergency,   // same hardware path; latches a fault
+};
+```
+
+The library **never** silently substitutes one stop mode for another. `stop(Decelerate)` returns `ErrorCode::Unsupported` until the engine learns to splice a fresh deceleration profile into an in-flight move. Motion-control safety depends on accurate stop semantics — lying here is a bug.
+
+After an emergency stop or a driver/limit fault, `clearFault()` returns the axis to `Disabled` (not `Idle`). The host must explicitly call `enable()` again before the next motion — eliminates the "the motor jumped because I called clearFault" surprise.
+
+```cpp
+const auto fs = axis->faultStatus();
+if (fs.active()) {
+    Serial.printf("fault: %s (driver detail=0x%lx)\n",
+                  faultToString(fs.code),
+                  static_cast<unsigned long>(fs.driverDetail));
+    axis->clearFault();
+    axis->enable();
+}
+```
+
+## Composing axes by hand
+
+The three `create*()` factories handle 99% of cases. For the remaining 1% — host integration tests, custom timer backends, alternative actuators — there's `createComposed`:
 
 ```cpp
 #include <ungula/motor.h>
+#include <ungula/motor/pulse/fake_pulse_engine.h>
+#include <ungula/motor/actuator/step_dir_actuator.h>
 
-mot_x.home();
-mot_y.home();
-while (mot_x.isHoming() || mot_y.isHoming()) {
-    ungula::core::time::delayMs(5);
-}
-if (!mot_x.isHomed() || !mot_y.isHomed()) { /* report / retry */ }
+using namespace ungula::motor;
+
+auto engine   = std::make_unique<FakePulseEngine>();    // or your own IPulseEngine
+StepDirActuator::Config aCfg;
+auto actuator = std::make_unique<StepDirActuator>(*engine, aCfg);
+
+Axis::ComposedComponents comp;
+comp.timer    = nullptr;                                // fake engine doesn't need one
+comp.actuator = std::move(actuator);
+comp.common.limits.maxVelocitySps = 4000;
+comp.common.limits.accelSpsPerSec = 8000;
+comp.common.limits.decelSpsPerSec = 8000;
+comp.common.limits.maxStepRateSps = 200000;
+comp.engine   = std::move(engine);
+
+auto r = Axis::createComposed(std::move(comp));
+auto axis = r.takeValue();
 ```
 
-### `HomingRunner` (advanced)
-
-`HomingRunner` still ships as a standalone helper for callers that want to drive a strategy against an arbitrary `IHomeableMotor` implementation without going through `LocalMotor::home()` (tests, custom motor backends). For every production use on real `LocalMotor` the black-box API above is the right path — `LocalMotor` runs the runner internally, in-phase with the service timer.
-
-## Directory structure and contents
-
-```text
-src/
-  ungula_motor.h            Aggregator header (Arduino discovery)
-  motor/                        Main motor system (ungula::motor:: namespace)
-    motor_types.h               Enums, constants, value types
-    motor_state.h               FSM state enum and names
-    motor_event.h               Event types and MotorEvent struct
-    motion_profile.h            MotionProfileSpec for complex moves
-    i_motor.h                   Abstract motor interface
-    i_motor_driver.h            Abstract driver interface
-    i_motor_command_sink.h      Transport interface for remote control
-    i_motor_event_listener.h    Event listener interface
-    motor_event_publisher.h     Fixed-capacity event broadcaster
-    motor_fsm.h/cpp             Finite state machine
-    stall_detector.h            Dual-path stall scoring (DIAG + register)
-    limit_switch.h              Debounced NC limit switch (20 ms)
-    step_generator.h/cpp        GPTimer ISR + ramp calculator
-    local_motor.h/cpp           Autonomous motor controller
-    remote_motor.h/cpp          Proxy for cross-board control
-    motor_coordinator.h         Multi-motor orchestrator
-    drivers/
-      tmc2209.h/cpp             TMC2209 UART driver with stall detection
-    homing/
-      i_homeable_motor.h        IMotor + hooks strategies need
-      i_homing_strategy.h       Strategy interface (begin/tick/finish)
-      homing_runner.h/cpp       Non-blocking driver for a strategy
-      stall_homing_strategy.h/cpp         Hard-stop homing via stall detection
-      limit_switch_homing_strategy.h/cpp  Limit-switch homing
-```
+This is the same factory `test_axis_e2e_smoke` uses to drive a real `Axis` against `FakePulseEngine` for deterministic host testing.
 
 ## Testing
 
-Desktop tests cover the legacy HAL (StepperController, StepperConfig, MotorTimer) and the homing subsystem (stall strategy, limit-switch strategy, runner lifecycle) using `MockHomeableMotor` — no real motor needed:
+Host-side tests live under `tests/` and use GoogleTest. Build them with the workspace's regular CMake flow:
 
-```shell
+```bash
 cd lib_motor/tests
+mkdir -p build && cd build
+cmake ..
+cmake --build .
+ctest --output-on-failure
+
+# Or
+cd lib_motor/tests
+chmod +x *sh
 ./1_build.sh
 ./2_run.sh
 ```
-
-To fetch dependencies from GitHub instead of using local sibling directories (which I do...):
-
-```shell
-cd lib_motor/tests
-mkdir build && cd build
-cmake .. -DUSE_LOCAL_DEPS=OFF
-cmake --build .
-ctest --output-on-failure
-```
-
-## Dependencies
-
-| Library | Used for |
-| --- | --- |
-| UngulaCore | `ungula::core::time` (FSM timestamps), `GpioAccess` (limit switches) |
-| UngulaHal | `Uart` (TMC2209 communication), `gpio` (driver pins) |
-| EmblogX | Logging in legacy TmcStepper only |
 
 ## Acknowledgements
 
@@ -506,25 +563,4 @@ Thanks to Claude and ChatGPT for helping on generating this documentation.
 
 ## License
 
-MIT — see LICENSE file.
-
----
-
-## Arduino CLI symlink note (rarely relevant)
-
-This library ships a flat forwarder header at `src/ungula_motor.h` that
-just `#include`s `ungula/motor.h`. `library.properties` `includes=` points
-at the forwarder.
-
-It only exists to work around an Arduino CLI quirk: when the library is
-consumed through a symlink, the CLI sometimes fails to discover headers
-nested under `src/ungula/`. The flat forwarder fixes that scan.
-
-**Host code keeps including the real header**:
-
-```cpp
-#include <ungula/motor.h>
-```
-
-PlatformIO, ESP-IDF component builds, and plain CMake setups can ignore
-the forwarder.
+MIT. Copyright (c) 2026 Alex Conesa. See [`LICENSE`](LICENSE).

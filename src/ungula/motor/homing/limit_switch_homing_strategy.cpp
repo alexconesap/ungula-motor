@@ -1,147 +1,88 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2024-2026 Alex Conesa
+// Copyright (c) 2026 Alex Conesa
 // See LICENSE file for details.
 
-#include "limit_switch_homing_strategy.h"
+#include "ungula/motor/homing/limit_switch_homing_strategy.h"
 
-#include "i_homeable_motor.h"
-
-namespace ungula::motor::homing
+namespace ungula::motor
 {
 
-    namespace
-    {
-
-        int32_t signForDirection(Direction dir)
-        {
-            return (dir == Direction::FORWARD) ? 1 : -1;
+Status LimitSwitchHomingStrategy::begin(IHomingAxis &axis)
+{
+        if (axis.isHomeActive()) {
+                // Already on the switch — skip FastApproach. Backoff first so
+                // SlowApproach has a clean off-switch state to start from.
+                phase_ = HomingPhase::Backoff;
+                return axis.commandMove((cfg_.approachDirection == Direction::Forward ? -1 : 1) *
+                                            cfg_.backoffSteps,
+                                        cfg_.slowFeedSps);
         }
+        phase_ = HomingPhase::FastApproach;
+        return axis.commandJog(cfg_.approachDirection, cfg_.fastFeedSps);
+}
 
-        Direction oppositeOf(Direction dir)
-        {
-            return (dir == Direction::FORWARD) ? Direction::BACKWARD : Direction::FORWARD;
-        }
-
-    } // namespace
-
-    LimitSwitchHomingStrategy::LimitSwitchHomingStrategy(const Config &cfg)
-            : cfg_(cfg)
-    {
-    }
-
-    bool LimitSwitchHomingStrategy::isAtHomeReference(const IHomeableMotor &motor) const
-    {
-        return motor.isLimitActive(cfg_.homingDirection);
-    }
-
-    void LimitSwitchHomingStrategy::begin(IHomeableMotor &motor)
-    {
-        phase_ = Phase::FastApproach;
-        succeeded_ = false;
-
-        // Any residual stall/fault from a prior attempt would block the first
-        // move. Limit state itself is cleared by the FSM when we start moving.
-        motor.clearStall();
-        motor.clearFault();
-
-        startApproach(motor, cfg_.fastSpeedSps, cfg_.fastAccelMs);
-    }
-
-    bool LimitSwitchHomingStrategy::tick(IHomeableMotor &motor)
-    {
-        const MotorFsmState fsmState = motor.state();
-
+HomingProgress LimitSwitchHomingStrategy::step(IHomingAxis &axis)
+{
         switch (phase_) {
-        case Phase::FastApproach:
-            if (fsmState == MotorFsmState::LimitReached) {
-                // LimitReached → Idle via emergencyStop so the next move is accepted.
-                motor.emergencyStop();
-                if (cfg_.finalApproach) {
-                    startBackoff(motor);
-                    phase_ = Phase::Backoff;
-                } else {
-                    phase_ = Phase::Done;
-                    succeeded_ = true;
-                    return true;
+        case HomingPhase::FastApproach: {
+                if (!axis.isHomeActive()) {
+                        // Motion completed without finding the switch. Either the
+                        // jog's safety bound was hit or the host stopped us
+                        // externally; either way this isn't a successful home.
+                        return HomingProgress::Failed;
                 }
-            } else if (fsmState == MotorFsmState::Fault) {
-                phase_ = Phase::Done;
-                return true;
-            }
-            return false;
-
-        case Phase::Backoff:
-            if (fsmState == MotorFsmState::TargetReached) {
-                motor.emergencyStop();
-                startApproach(motor, cfg_.slowSpeedSps, cfg_.slowAccelMs);
-                phase_ = Phase::SlowApproach;
-            } else if (fsmState == MotorFsmState::LimitReached) {
-                // Rare: backoff didn't clear the switch (too few steps). Bail out
-                // — caller should widen backoffSteps.
-                phase_ = Phase::Done;
-                return true;
-            } else if (fsmState == MotorFsmState::Fault) {
-                phase_ = Phase::Done;
-                return true;
-            }
-            return false;
-
-        case Phase::SlowApproach:
-            if (fsmState == MotorFsmState::LimitReached) {
-                motor.emergencyStop();
-                phase_ = Phase::Done;
-                succeeded_ = true;
-                return true;
-            }
-            if (fsmState == MotorFsmState::Fault) {
-                phase_ = Phase::Done;
-                return true;
-            }
-            return false;
-
-        case Phase::Done:
-            return true;
+                phase_ = HomingPhase::Backoff;
+                const auto s = axis.commandMove(
+                    (cfg_.approachDirection == Direction::Forward ? -1 : 1) * cfg_.backoffSteps,
+                    cfg_.slowFeedSps);
+                if (!s.ok())
+                        return HomingProgress::Failed;
+                return HomingProgress::InProgress;
         }
-        return true;
-    }
 
-    void LimitSwitchHomingStrategy::finish(IHomeableMotor &motor, bool succeeded)
-    {
-        if (motor.isMoving()) {
-            motor.emergencyStop();
+        case HomingPhase::Backoff: {
+                if (axis.isHomeActive()) {
+                        // Backoff didn't clear the switch. Either backoffSteps is
+                        // too small for the mechanics, or the switch is stuck.
+                        return HomingProgress::Failed;
+                }
+                phase_ = HomingPhase::SlowApproach;
+                const auto s = axis.commandJog(cfg_.approachDirection, cfg_.slowFeedSps);
+                if (!s.ok())
+                        return HomingProgress::Failed;
+                return HomingProgress::InProgress;
         }
-        motor.clearStall();
-        motor.clearFault();
 
-        if (succeeded) {
-            motor.resetPosition();
+        case HomingPhase::SlowApproach: {
+                if (!axis.isHomeActive()) {
+                        // Slow jog completed without the switch firing — see
+                        // FastApproach above. Likely a wiring issue.
+                        return HomingProgress::Failed;
+                }
+                phase_ = HomingPhase::SetHomePosition;
+                const auto s = axis.resetPosition(cfg_.homePositionSteps);
+                if (!s.ok())
+                        return HomingProgress::Failed;
+                phase_ = HomingPhase::Complete;
+                return HomingProgress::Succeeded;
         }
-    }
 
-    void LimitSwitchHomingStrategy::startApproach(IHomeableMotor &motor, int32_t speedSps, uint32_t accelMs)
-    {
-        motor.setProfileSpeed(MotionProfile::HOMING, speedSps);
-        motor.setProfileAccel(MotionProfile::HOMING, accelMs);
-        motor.setProfileDecel(MotionProfile::HOMING, accelMs);
-        motor.setActiveProfile(MotionProfile::HOMING);
-
-        if (cfg_.homingDirection == Direction::FORWARD) {
-            motor.moveForward();
-        } else {
-            motor.moveBackward();
+        default:
+                // Any other phase reaching step() (Idle/Complete/Failed) is a
+                // controller bug — the controller shouldn't tick us there.
+                return HomingProgress::Failed;
         }
-    }
+}
 
-    void LimitSwitchHomingStrategy::startBackoff(IHomeableMotor &motor)
-    {
-        const Direction away = oppositeOf(cfg_.homingDirection);
-        const int32_t deltaSteps = signForDirection(away) * cfg_.backoffSteps;
+void LimitSwitchHomingStrategy::finish(IHomingAxis &axis, bool succeeded)
+{
+        if (!succeeded) {
+                (void)axis.stopMove();
+        }
+        // The controller already updates its phase; we don't reset our
+        // own phase_ here so a follow-up `currentPhase()` query reflects
+        // what we actually reached. The next homing cycle re-enters
+        // `begin()` which resets phase_ before commanding motion.
+}
 
-        motor.setProfileSpeed(MotionProfile::HOMING, cfg_.slowSpeedSps);
-        motor.setProfileAccel(MotionProfile::HOMING, cfg_.slowAccelMs);
-        motor.setProfileDecel(MotionProfile::HOMING, cfg_.slowAccelMs);
-        motor.setActiveProfile(MotionProfile::HOMING);
-        motor.moveBy(static_cast<float>(deltaSteps), DistanceUnit::STEPS);
-    }
-
-} // namespace ungula::motor::homing
+} // namespace ungula::motor

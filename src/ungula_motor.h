@@ -4,6 +4,12 @@
 
 #pragma once
 
-// Flat forwarder so the Arduino CLI can discover this library through a
-// symlink at the host project. The real public header is ungula/motor.h.
+#ifndef __cplusplus
+#error UngulaMotor requires a C++ compiler
+#endif
+
+// Arduino-style chain header. Including this in an Arduino .ino activates
+// the library; build systems that don't auto-discover via this header
+// (ESP-IDF, plain CMake) can include `<ungula/motor.h>` directly.
+
 #include "ungula/motor.h"

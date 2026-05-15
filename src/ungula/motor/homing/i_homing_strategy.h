@@ -1,58 +1,70 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2024-2026 Alex Conesa
+// Copyright (c) 2026 Alex Conesa
 // See LICENSE file for details.
 
 #pragma once
 
-namespace ungula::motor::homing
+#include <cstdint>
+
+#include "ungula/motor/result.h"
+#include "ungula/motor/axis_types.h"
+#include "ungula/motor/axis_state.h"
+
+namespace ungula::motor
 {
 
-    class IHomeableMotor;
+class IHomingAxis; // forward — defined in i_homing_axis.h
 
-    /// @brief Policy object that tells a HomingRunner how to find position zero.
-    ///
-    /// Homing logic varies per machine: hard stop with stall detection, limit
-    /// switch, optical sensor, encoder index. The strategy isolates that logic
-    /// from the motor itself so the same IHomeableMotor can be homed different ways
-    /// in different projects.
-    ///
-    /// Lifecycle, called by HomingRunner:
-    ///   1. begin(motor)  — set up profiles, enable sensors, start first move.
-    ///   2. tick(motor)   — poll on each loop iteration. Returns true when done
-    ///                      (either homed or gave up).
-    ///   3. finish(motor, succeeded) — cleanup: stop motor if running, reset
-    ///                                 position on success.
-    ///
-    /// The strategy only talks to the motor through IHomeableMotor. No direct GPIO
-    /// access, no ISR coupling. Keeps strategies portable across drivers.
-    class IHomingStrategy {
+enum class HomingPhase : uint8_t; // forward — defined in homing_controller.h
+
+/// Strategy interface for homing routines. The strategy never touches
+/// GPIO directly — it issues abstract commands through `IHomingAxis`
+/// (jog/stop/await-completion/sense-active/reset-position).
+///
+/// Each `step()` call returns whether homing is complete. The controller
+/// invokes `step()` from task context after each motion event delivered
+/// by the actuator, NOT on a polling timer. That is the key fix vs. the
+/// old `IHomingStrategy::tick()` which raced against auto-clearing FSM
+/// states.
+/// State returned by `IHomingStrategy::step()`. Named `HomingProgress` —
+/// not `Result` — to avoid shadowing the project's generic `Result<T>`
+/// template inside homing code.
+enum class HomingProgress : uint8_t {
+        InProgress = 0,
+        Succeeded,
+        Failed,
+};
+
+class IHomingStrategy {
     public:
         virtual ~IHomingStrategy() = default;
 
-        /// @brief Prepare sensors and command the first motion.
-        virtual void begin(IHomeableMotor &motor) = 0;
+        /// Called once when the controller starts homing.
+        virtual Status begin(IHomingAxis &axis) = 0;
 
-        /// @brief Advance the internal phase. Returns true when homing has
-        /// finished (check succeeded() to know the outcome).
-        virtual bool tick(IHomeableMotor &motor) = 0;
+        /// Called every time the axis reports a completion event
+        /// (MotionCompleted, MotionStopped, LimitActivated). Returns
+        /// `InProgress` while more steps are queued; `Succeeded`/`Failed`
+        /// when the strategy is done.
+        virtual HomingProgress step(IHomingAxis &axis) = 0;
 
-        /// @brief Terminal cleanup. Called once after tick() returns true or
-        /// when the runner aborts/timeouts.
-        virtual void finish(IHomeableMotor &motor, bool succeeded) = 0;
+        /// Final cleanup. Always called once `step()` returns Succeeded or
+        /// Failed (or the controller aborts).
+        virtual void finish(IHomingAxis &axis, bool succeeded) = 0;
 
-        /// @brief Outcome of the last run. Valid after tick() returns true or
-        /// finish() has been called.
-        virtual bool succeeded() const = 0;
+        /// Reports whether the axis is currently sitting on the home
+        /// reference at boot — used to seed `isHomed()` without having to
+        /// run a full homing cycle on every reset for absolute encoders.
+        virtual bool isAtHomeReference(const IHomingAxis &axis) const
+        {
+                (void)axis;
+                return false;
+        }
 
-        /// @brief Boot-time snapshot: is the axis already at the home
-        /// reference right now, without starting a homing sequence?
-        /// Called by LocalMotor::begin() to seed the initial isHomed()
-        /// value across reboots.
-        ///   - Limit-switch strategies: read the configured limit pin;
-        ///     return true if asserted.
-        ///   - Stall-based strategies: no reliable "am I at home"
-        ///     signal exists at rest, so they return false.
-        virtual bool isAtHomeReference(const IHomeableMotor &motor) const = 0;
-    };
+        /// Current strategy phase. Exposed so `HomingController` can
+        /// surface it without redefining the same FSM. Strategies must
+        /// keep this consistent with their internal state.
+        virtual HomingPhase currentPhase() const = 0;
+};
 
-} // namespace ungula::motor::homing
+} // namespace ungula::motor

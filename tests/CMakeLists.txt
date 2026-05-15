@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(ungula_motor_lib_tests)
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(FETCHCONTENT_BASE_DIR ${CMAKE_CURRENT_LIST_DIR}/vendor)
 
@@ -14,99 +15,155 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(googletest)
 
-# ---------------------------------------------------------------------------
-# Dependencies: UngulaCore (headers for the time API, GpioAccess) and EmblogX
-# (tmc_stepper.cpp uses log_error via <emblogx/logger.h>).
-#
-# By default we use sibling directories (../../lib, ../../lib_emblogx) which
-# is the layout during local development. External consumers who cloned only
-# lib_motor can set -DUSE_LOCAL_DEPS=OFF to fetch them from GitHub instead.
-# ---------------------------------------------------------------------------
-option(USE_LOCAL_DEPS "Use local sibling lib/ and lib_emblogx/ directories" ON)
-
-if(USE_LOCAL_DEPS)
-    set(LIB_SRC ${CMAKE_CURRENT_LIST_DIR}/../../lib/src)
-    set(LIB_EMBLOGX_SRC ${CMAKE_CURRENT_LIST_DIR}/../../lib_emblogx/src)
-else()
-    FetchContent_Declare(
-        ungula_core
-        GIT_REPOSITORY https://github.com/alexconesap/ungula-core.git
-        GIT_TAG main
-    )
-    FetchContent_MakeAvailable(ungula_core)
-    set(LIB_SRC ${ungula_core_SOURCE_DIR}/src)
-
-    FetchContent_Declare(
-        emblogx
-        GIT_REPOSITORY https://github.com/alexconesap/emblogx.git
-        GIT_TAG main
-    )
-    FetchContent_MakeAvailable(emblogx)
-    set(LIB_EMBLOGX_SRC ${emblogx_SOURCE_DIR}/src)
-endif()
-
+# Sibling libraries during local development.
 set(LIB_MOTOR_SRC ${CMAKE_CURRENT_LIST_DIR}/../src)
+set(LIB_HAL_SRC   ${CMAKE_CURRENT_LIST_DIR}/../../lib_hal/src)
+set(LIB_CORE_SRC  ${CMAKE_CURRENT_LIST_DIR}/../../lib/src)
 
 include_directories(
     ${CMAKE_CURRENT_LIST_DIR}
-    ${LIB_SRC}
-    ${LIB_EMBLOGX_SRC}
     ${LIB_MOTOR_SRC}
+    ${LIB_HAL_SRC}
+    ${LIB_CORE_SRC}
 )
-
-add_compile_definitions(
-    EMBLOGX_BACKEND_STDIO
-    EMBLOGX_LOG_PREFIX="[TEST] "
-    EMBLOGX_ENABLE_SINK_CONSOLE=1
-    EMBLOGX_ENABLE_SINK_MEMORY=0
-    EMBLOGX_ENABLE_SINK_HTTP=0
-    EMBLOGX_ENABLE_SINK_SD=0
-)
-
-add_executable(test_ungula_motor
-    test_current_curve.cpp
-    ${LIB_EMBLOGX_SRC}/emblogx/logger_core.cpp
-    ${LIB_EMBLOGX_SRC}/emblogx/async_dispatcher.cpp
-    ${LIB_EMBLOGX_SRC}/emblogx/sinks/console_sink.cpp
-)
-target_link_libraries(test_ungula_motor gtest_main)
 
 # ---------------------------------------------------------------------------
-# Homing strategy tests — pure host tests, no hardware. Strategies depend
-# only on IHomeableMotor, so MockHomeableMotor gives us full coverage of
-# stall/limit-switch logic without esp_timer, gptimer or a real driver.
-#
-# The HomingRunner source pulls in <ungula/core/time/time.h> from UngulaCore.
-# We already add LIB_SRC to the include paths above, so it resolves.
+# MotionPlanner tests — pure logic; no HAL dependency at all.
 # ---------------------------------------------------------------------------
-add_executable(test_ungula_motor_homing
-    test_stall_homing_strategy.cpp
-    test_limit_switch_homing_strategy.cpp
-    test_homing_runner.cpp
-    ${LIB_MOTOR_SRC}/ungula/motor/homing/stall_homing_strategy.cpp
+add_executable(test_motion_planner
+    test_motion_planner.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/planning/motion_planner.cpp
+)
+target_link_libraries(test_motion_planner gtest_main)
+
+# ---------------------------------------------------------------------------
+# HalPulseEngine tests — uses the HwTimerFake from lib_hal, the host GPIO
+# stub from lib_hal (default backend), and the host time stub from lib.
+# No real hardware involved.
+# ---------------------------------------------------------------------------
+add_executable(test_hal_pulse_engine
+    test_hal_pulse_engine.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/pulse/hal_pulse_engine.cpp
+    ${LIB_HAL_SRC}/ungula/hal/timer/platforms/hwtimer_default.cpp
+)
+target_link_libraries(test_hal_pulse_engine gtest_main)
+
+# ---------------------------------------------------------------------------
+# FakePulseEngine tests — header-only fake; no .cpp to compile in.
+# ---------------------------------------------------------------------------
+add_executable(test_fake_pulse_engine
+    test_fake_pulse_engine.cpp
+)
+target_link_libraries(test_fake_pulse_engine gtest_main)
+
+# ---------------------------------------------------------------------------
+# StepDirActuator tests — use FakePulseEngine; no HAL hookup needed.
+# ---------------------------------------------------------------------------
+add_executable(test_step_dir_actuator
+    test_step_dir_actuator.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/actuator/step_dir_actuator.cpp
+)
+target_link_libraries(test_step_dir_actuator gtest_main)
+
+# ---------------------------------------------------------------------------
+# Axis-facade-dependent tests share a common source list. The host
+# timer backend has no autonomous ISR so motion never completes
+# spontaneously — tests cover everything up to "armed".
+# ---------------------------------------------------------------------------
+set(AXIS_SRC_FILES
+    ${LIB_MOTOR_SRC}/ungula/motor/axis.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/actuator/step_dir_actuator.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/planning/motion_planner.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/pulse/hal_pulse_engine.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/limits/sensor_bank.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/homing/homing_controller.cpp
     ${LIB_MOTOR_SRC}/ungula/motor/homing/limit_switch_homing_strategy.cpp
-    ${LIB_MOTOR_SRC}/ungula/motor/homing/homing_runner.cpp
+    ${LIB_HAL_SRC}/ungula/hal/timer/platforms/hwtimer_default.cpp
 )
-target_link_libraries(test_ungula_motor_homing gtest_main)
+
+add_executable(test_axis_step_dir_stepper
+    test_axis_step_dir_stepper.cpp
+    ${AXIS_SRC_FILES}
+)
+target_link_libraries(test_axis_step_dir_stepper gtest_main)
 
 # ---------------------------------------------------------------------------
-# FSM, event publisher, coordinator, and remote-motor proxy — all pure
-# host code. No esp_timer / gptimer / FreeRTOS — these compile and run
-# entirely on the host. motor_fsm.cpp pulls ungula::core::time::syncNow() at
-# event-stamp time; UngulaCore is already on the include path.
+# Sensors, homing controller, axis event emission.
 # ---------------------------------------------------------------------------
-add_executable(test_ungula_motor_core
-    test_motor_fsm.cpp
-    test_motor_event_publisher.cpp
-    test_remote_motor.cpp
-    test_motor_coordinator.cpp
-    ${LIB_MOTOR_SRC}/ungula/motor/motor_fsm.cpp
-    ${LIB_MOTOR_SRC}/ungula/motor/remote_motor.cpp
+add_executable(test_sensor_bank
+    test_sensor_bank.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/limits/sensor_bank.cpp
 )
-target_link_libraries(test_ungula_motor_core gtest_main)
+target_link_libraries(test_sensor_bank gtest_main)
+
+add_executable(test_homing_controller
+    test_homing_controller.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/homing/homing_controller.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/homing/limit_switch_homing_strategy.cpp
+)
+target_link_libraries(test_homing_controller gtest_main)
+
+add_executable(test_axis_events
+    test_axis_events.cpp
+    ${AXIS_SRC_FILES}
+)
+target_link_libraries(test_axis_events gtest_main)
+
+# ---------------------------------------------------------------------------
+# End-to-end smoke test. Uses FakePulseEngine through the
+# Axis::createComposed factory so the full pipeline can be exercised
+# deterministically (no GPIO, no real timer ISR, no real hardware).
+# ---------------------------------------------------------------------------
+add_executable(test_axis_e2e_smoke
+    test_axis_e2e_smoke.cpp
+    ${AXIS_SRC_FILES}
+)
+target_link_libraries(test_axis_e2e_smoke gtest_main)
+
+# ---------------------------------------------------------------------------
+# TMC2209 driver components — all use the FakeTmcUart, no real UART
+# required. Each is independent of the others.
+# ---------------------------------------------------------------------------
+add_executable(test_tmc2209_configurator
+    test_tmc2209_configurator.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/drivers/tmc2209/tmc2209_configurator.cpp
+)
+target_link_libraries(test_tmc2209_configurator gtest_main)
+
+add_executable(test_tmc2209_diagnostics
+    test_tmc2209_diagnostics.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/drivers/tmc2209/tmc2209_diagnostics.cpp
+)
+target_link_libraries(test_tmc2209_diagnostics gtest_main)
+
+add_executable(test_tmc2209_stallguard
+    test_tmc2209_stallguard.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/drivers/tmc2209/tmc2209_stallguard.cpp
+)
+target_link_libraries(test_tmc2209_stallguard gtest_main)
+
+# CRC self-consistency test only compiles the static CRC method, which
+# lives in the .cpp — pull in the source so the static method links.
+# No HAL UART dependency, no lib_hal source needed.
+add_executable(test_tmc2209_hal_uart_crc
+    test_tmc2209_hal_uart_crc.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/drivers/tmc2209/tmc2209_hal_uart.cpp
+    ${LIB_HAL_SRC}/ungula/hal/uart/platforms/uart_default.cpp
+)
+target_link_libraries(test_tmc2209_hal_uart_crc gtest_main)
 
 enable_testing()
 include(GoogleTest)
-gtest_discover_tests(test_ungula_motor)
-gtest_discover_tests(test_ungula_motor_homing)
-gtest_discover_tests(test_ungula_motor_core)
+gtest_discover_tests(test_motion_planner)
+gtest_discover_tests(test_hal_pulse_engine)
+gtest_discover_tests(test_fake_pulse_engine)
+gtest_discover_tests(test_step_dir_actuator)
+gtest_discover_tests(test_axis_step_dir_stepper)
+gtest_discover_tests(test_sensor_bank)
+gtest_discover_tests(test_homing_controller)
+gtest_discover_tests(test_axis_events)
+gtest_discover_tests(test_axis_e2e_smoke)
+gtest_discover_tests(test_tmc2209_configurator)
+gtest_discover_tests(test_tmc2209_diagnostics)
+gtest_discover_tests(test_tmc2209_stallguard)
+gtest_discover_tests(test_tmc2209_hal_uart_crc)

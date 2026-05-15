@@ -1,77 +1,82 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2024-2026 Alex Conesa
+// Copyright (c) 2026 Alex Conesa
 // See LICENSE file for details.
 
 #pragma once
 
 #include <cstdint>
 
-#include "../motor_types.h"
-#include "i_homing_strategy.h"
+#include "ungula/motor/homing/homing_controller.h"
+#include "ungula/motor/homing/i_homing_strategy.h"
 
-namespace ungula::motor::homing
+namespace ungula::motor
 {
 
-    /// @brief Home against a limit switch (mechanical, optical, hall…).
-    ///
-    /// Sequence:
-    ///   1. Fast approach in the homing direction until the motor reports
-    ///      LimitReached. If the switch was already closed at start(), the
-    ///      FSM fires LimitReached on the first service tick and the flow
-    ///      still works — no separate pre-check needed.
-    ///   2. Back off a small distance to release the switch.
-    ///   3. Optional slow re-approach so the final hit is repeatable.
-    ///   4. Reset the motor position to 0.
-    ///
-    /// Requirements on the motor before start():
-    ///   - The relevant limit switch must be registered on the motor via
-    ///     addLimitBackward() or addLimitForward(), matching homingDirection.
-    ///     LocalMotor stops the motor and sets LimitReached automatically.
-    ///   - The driver and FSM must be enabled.
-    ///
-    /// This strategy never reads the switch GPIO itself — LocalMotor owns the
-    /// debounce and polarity logic. The strategy just watches the FSM.
-    class LimitSwitchHomingStrategy : public IHomingStrategy {
+/// "Classic" homing routine using a single reference switch:
+///
+///   1. **FastApproach**: jog towards the home direction at
+///      `fastFeedSps` until the home sensor activates.
+///   2. **Backoff**: move `backoffSteps` AWAY from the switch so the
+///      slow approach starts from a stable known-off position.
+///   3. **SlowApproach**: jog towards the switch at `slowFeedSps`
+///      until it activates again. The slower speed reduces the
+///      mechanical overshoot at the activation point — a typical
+///      improvement of 10–20× position repeatability.
+///   4. **SetHomePosition**: stop motion, call
+///      `axis.resetPosition(homePositionSteps)`.
+///   5. **Complete**.
+///
+/// At any phase, motion completing without the home sensor having
+/// fired is treated as a stall / hardware-issue failure.
+///
+/// Direction convention: `approachDirection` is the direction TOWARDS
+/// the switch. Backoff goes the opposite way. The Axis layer's
+/// TravelLimit sensors are NOT consulted during homing — they may
+/// well sit on the same wire as the home switch on cheap setups, and
+/// the host's responsibility is to wire them appropriately. (A
+/// dedicated home sensor is the strong recommendation.)
+class LimitSwitchHomingStrategy final : public IHomingStrategy {
     public:
         struct Config {
-            Direction homingDirection = Direction::BACKWARD;
-            int32_t fastSpeedSps = 2000;
-            uint32_t fastAccelMs = 200U;
-            int32_t slowSpeedSps = 500;
-            uint32_t slowAccelMs = 100U;
-            int32_t backoffSteps = 200;
-            bool finalApproach = true;
+                Direction approachDirection = Direction::Backward;
+                Velocity fastFeedSps = 2000;
+                Velocity slowFeedSps = 200;
+                Distance backoffSteps = 200;
+                /// Position to write into the axis once the slow approach has
+                /// captured the switch. Usually 0 (the home sensor IS the
+                /// origin), but absolute machines that want home offset from
+                /// the switch use this.
+                Position homePositionSteps = 0;
         };
 
-        explicit LimitSwitchHomingStrategy(const Config &cfg);
-
-        void begin(IHomeableMotor &motor) override;
-        bool tick(IHomeableMotor &motor) override;
-        void finish(IHomeableMotor &motor, bool succeeded) override;
-
-        bool succeeded() const override
+        explicit LimitSwitchHomingStrategy(const Config &cfg)
+                : cfg_(cfg)
         {
-            return succeeded_;
         }
 
-        /// @brief A limit-switch strategy can answer "am I at home?"
-        /// just by reading the pin — no motion needed.
-        bool isAtHomeReference(const IHomeableMotor &motor) const override;
+        LimitSwitchHomingStrategy(const LimitSwitchHomingStrategy &) = delete;
+        LimitSwitchHomingStrategy &operator=(const LimitSwitchHomingStrategy &) = delete;
+
+        // ---- IHomingStrategy --------------------------------------------
+
+        Status begin(IHomingAxis &axis) override;
+        HomingProgress step(IHomingAxis &axis) override;
+        void finish(IHomingAxis &axis, bool succeeded) override;
+        HomingPhase currentPhase() const override
+        {
+                return phase_;
+        }
+
+        /// True if the axis is already sitting on the home sensor. The
+        /// controller uses this to seed `isHomed()` at boot.
+        bool isAtHomeReference(const IHomingAxis &axis) const override
+        {
+                return axis.isHomeActive();
+        }
 
     private:
-        enum class Phase : uint8_t {
-            FastApproach, // drive into the switch at full speed.
-            Backoff, // step off the switch.
-            SlowApproach, // repeatable final hit.
-            Done
-        };
-
-        void startApproach(IHomeableMotor &motor, int32_t speedSps, uint32_t accelMs);
-        void startBackoff(IHomeableMotor &motor);
-
         Config cfg_;
-        Phase phase_ = Phase::FastApproach;
-        bool succeeded_ = false;
-    };
+        HomingPhase phase_ = HomingPhase::Idle;
+};
 
-} // namespace ungula::motor::homing
+} // namespace ungula::motor

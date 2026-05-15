@@ -10,6 +10,8 @@ if(ESP_PLATFORM)
 	return()
 endif()
 
-project(UngulaMotor VERSION 2.0.3)
+project(UngulaMotor VERSION 3.0.0)
 
-add_subdirectory(src)
+# Host-side standalone build placeholder. Host tests live under tests/
+# and glob src/ themselves via their own CMakeLists.txt — nothing to
+# add_subdirectory here today.

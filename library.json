@@ -1,7 +1,7 @@
 {
   "name": "UngulaMotor",
-  "description": "Stepper motor control for ESP32 — autonomous motion with FSM, stall detection, and event system",
-  "keywords": "motor, stepper, tmc2209, motion, stall, fsm, driver",
+  "description": "Embedded C++17 motion control: portable Axis abstraction over open-loop stepper, STEP/DIR servo, and CAN servo drives. Deterministic ISR-driven pulse engine.",
+  "keywords": "motor, stepper, servo, can, tmc2209, motion, axis, pulse, planner",
   "license": "MIT",
   "authors": [
     {
@@ -13,7 +13,7 @@
     "type": "git",
     "url": "https://github.com/alexconesap/ungula-motor.git"
   },
-  "version": "1.1.0",
+  "version": "3.0.0-alpha.3",
   "frameworks": ["arduino", "espidf", "*"],
   "platforms": ["espressif32"],
   "headers": "ungula/motor.h",
