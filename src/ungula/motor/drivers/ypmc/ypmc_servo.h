@@ -105,6 +105,16 @@ struct DrivePolarity {
         bool alarmActiveLow = true;
         /// COIN / INP output is active-HIGH (LOW = not yet settled).
         bool inPositionActiveHigh = true;
+        /// Which DIR level the pulse engine writes for `Direction::Forward`.
+        /// `true` (default) → Forward = HIGH, Backward = LOW.
+        /// `false` swaps the mapping at the wire level — set this when
+        /// the motor's physical Forward doesn't match the lib's logical
+        /// Forward (most common cause: motor mounted reversed, or the
+        /// drive's electronic gear sign is flipped). Re-wiring DIR+/DIR−
+        /// or changing the drive's Pn parameter has the same effect but
+        /// this knob is a firmware 'fix' for a 'hardware' problem.
+        /// A soft guy solves issues made by a hard guy ;-)
+        bool dirActiveHigh = true;
 };
 
 inline constexpr DrivePolarity kDefaultDrivePolarity = {};
@@ -121,7 +131,7 @@ inline constexpr DrivePolarity kDefaultDrivePolarity = {};
 /// Returns `InvalidConfig` if the caller has already filled the
 /// sensor slots beyond capacity.
 Status applyDriveDefaults(StepDirServoAxisConfig &cfg,
-                          const DriveTiming &timing   = kDefaultDriveTiming,
+                          const DriveTiming &timing = kDefaultDriveTiming,
                           const DrivePolarity &polarity = kDefaultDrivePolarity);
 
 /// 24 V holding-brake controller for YPMC motors that carry the brake
@@ -180,7 +190,7 @@ class BrakeController final : public IAxisEventListener {
 
         explicit BrakeController(const Config &cfg);
 
-        BrakeController(const BrakeController &)            = delete;
+        BrakeController(const BrakeController &) = delete;
         BrakeController &operator=(const BrakeController &) = delete;
 
         /// Configure the GPIO and seed the brake as ENGAGED (coil
@@ -197,9 +207,15 @@ class BrakeController final : public IAxisEventListener {
         /// Returns `NotInitialized` before `begin()`.
         Status engage();
 
-        bool isReleased() const { return released_; }
+        bool isReleased() const
+        {
+                return released_;
+        }
 
-        void setAutoEngage(bool on) { cfg_.autoEngageOnMotionEnd = on; }
+        void setAutoEngage(bool on)
+        {
+                cfg_.autoEngageOnMotionEnd = on;
+        }
 
         // ---- IAxisEventListener ----------------------------------
 
@@ -207,8 +223,8 @@ class BrakeController final : public IAxisEventListener {
 
     private:
         Config cfg_;
-        bool   begun_    = false;
-        bool   released_ = false;
+        bool begun_ = false;
+        bool released_ = false;
 
         void writeCoil(bool energised);
 };

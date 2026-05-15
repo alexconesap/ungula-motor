@@ -16,7 +16,7 @@ namespace time = ungula::core::time;
 Status applyDriveDefaults(StepDirServoAxisConfig &cfg, const DriveTiming &timing,
                           const DrivePolarity &polarity)
 {
-        cfg.dirActiveHigh   = true;
+        cfg.dirActiveHigh   = polarity.dirActiveHigh;
         cfg.enableActiveLow = !polarity.srvOnActiveHigh;
         cfg.dirSetupUs      = timing.dirSetupUs;
 
