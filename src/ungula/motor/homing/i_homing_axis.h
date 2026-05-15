@@ -46,6 +46,14 @@ class IHomingAxis {
         /// active. Polled through `SensorBank`.
         virtual bool isHomeActive() const = 0;
 
+        /// True when a stall event has been latched during the
+        /// current homing cycle. Strategies based on stall detection
+        /// (e.g. `StallHomingStrategy`) read this after motion idle
+        /// to know whether the jog ended because the driver reported
+        /// a stall, vs. the jog's safety bound naturally expiring.
+        /// Default false for strategies that don't need it.
+        virtual bool isStallActive() const { return false; }
+
         /// True when the last commanded move is no longer in flight
         /// (engine reports `!isRunning`).
         virtual bool isMotionIdle() const = 0;

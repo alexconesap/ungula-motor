@@ -7,7 +7,6 @@
 #include <cstdint>
 #include "ungula/motor/axis_types.h"
 #include "ungula/motor/limits/sensor_input.h"
-#include "ungula/motor/pulse/i_pulse_engine.h"
 
 namespace ungula::motor
 {
@@ -45,7 +44,11 @@ struct StepDirStepperAxisConfig {
         DirectionPin dirPin;
         EnablePin enablePin; // may be GPIO_NONE if not wired
 
-        PulseMode pulseMode = PulseMode::Internal;
+        // NOTE: `PulseMode::External` (host-driven ticking) is not wired
+        // through the Axis factories. The pulse engine hard-rejects it
+        // anyway. When external ticking is implemented end-to-end the
+        // selector field will return here — until then a user-visible
+        // knob that the factory silently ignores is worse than no knob.
 
         bool dirActiveHigh = true; // common convention; flip per drive
         bool enableActiveLow = true; // most stepper drivers are active-LOW EN
@@ -66,8 +69,6 @@ struct StepDirServoAxisConfig {
         EnablePin enablePin; // optional; many servo drives manage enable in hardware
         InputPin alarmInputPin; // optional; drive ALM output
         InputPin inPositionInputPin; // optional; drive INP/COIN output
-
-        PulseMode pulseMode = PulseMode::Internal;
 
         bool dirActiveHigh = true;
         bool enableActiveLow = false; // industrial servos usually active-HIGH (SRV-ON)

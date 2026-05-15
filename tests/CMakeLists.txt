@@ -78,6 +78,7 @@ set(AXIS_SRC_FILES
     ${LIB_MOTOR_SRC}/ungula/motor/limits/sensor_bank.cpp
     ${LIB_MOTOR_SRC}/ungula/motor/homing/homing_controller.cpp
     ${LIB_MOTOR_SRC}/ungula/motor/homing/limit_switch_homing_strategy.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/homing/stall_homing_strategy.cpp
     ${LIB_HAL_SRC}/ungula/hal/timer/platforms/hwtimer_default.cpp
 )
 
@@ -151,6 +152,12 @@ add_executable(test_tmc2209_stallguard
 )
 target_link_libraries(test_tmc2209_stallguard gtest_main)
 
+add_executable(test_tmc2209_coolstep
+    test_tmc2209_coolstep.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/drivers/tmc2209/tmc2209_coolstep.cpp
+)
+target_link_libraries(test_tmc2209_coolstep gtest_main)
+
 # CRC self-consistency test only compiles the static CRC method, which
 # lives in the .cpp — pull in the source so the static method links.
 # No HAL UART dependency, no lib_hal source needed.
@@ -176,4 +183,5 @@ gtest_discover_tests(test_axis_e2e_smoke)
 gtest_discover_tests(test_tmc2209_configurator)
 gtest_discover_tests(test_tmc2209_diagnostics)
 gtest_discover_tests(test_tmc2209_stallguard)
+gtest_discover_tests(test_tmc2209_coolstep)
 gtest_discover_tests(test_tmc2209_hal_uart_crc)

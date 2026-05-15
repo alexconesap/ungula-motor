@@ -195,7 +195,10 @@ FaultStatus StepDirActuator::faultStatus() const
         if (!s.faulted)
                 return fs; // FaultCode::None, driverDetail = 0
 
-        // Map engine fault reason to Axis-level FaultCode.
+        // Map engine fault reason to Axis-level FaultCode. Must agree with
+        // the codes the Axis emits on the event path (see pumpSensors) —
+        // a listener and a `faultStatus()` query against the same event
+        // must report the same FaultCode.
         switch (s.finishedReason) {
         case StopReason::EmergencyStop:
                 fs.code = FaultCode::EmergencyStop;
@@ -208,6 +211,10 @@ FaultStatus StepDirActuator::faultStatus() const
                 break;
         case StopReason::StallDetected:
                 fs.code = FaultCode::Stall;
+                break;
+        case StopReason::LimitSwitch:
+        case StopReason::TravelLimit:
+                fs.code = FaultCode::LimitExceeded;
                 break;
         default:
                 // Engine says faulted but the reason doesn't map cleanly

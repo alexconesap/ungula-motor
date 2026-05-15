@@ -25,6 +25,38 @@ enum class AxisState : uint8_t {
         EmergencyStopped,
 };
 
+/// What the Axis does automatically when a motion completes (Moving →
+/// Idle, Jogging → Idle). Independent of any custom event listener
+/// the host might also register.
+///
+///   - `HoldCurrent` (default): leave the axis enabled. The TMC2209
+///     transitions IRUN → IHOLD on standstill detection (after
+///     `iHoldDelay`), so coils stay warm-ish but the motor holds
+///     position. Right for direct-drive vertical axes, belts under
+///     tension, anything that needs holding torque at rest.
+///
+///   - `AutoDisable`: drop the EN pin at every motion end. Coils
+///     freewheel — the carrier is held only by friction or
+///     mechanical resistance (non-back-drivable leadscrew, gear
+///     train, brake). Cool, silent, but the axis loses position
+///     reference if a force pushes it. The host must call
+///     `enable()` again before the next motion command.
+enum class IdlePolicy : uint8_t {
+        HoldCurrent = 0,
+        AutoDisable = 1,
+};
+
+inline const char *idlePolicyToString(IdlePolicy p)
+{
+        switch (p) {
+        case IdlePolicy::HoldCurrent:
+                return "HoldCurrent";
+        case IdlePolicy::AutoDisable:
+                return "AutoDisable";
+        }
+        return "Unknown";
+}
+
 inline const char *axisStateToString(AxisState s)
 {
         switch (s) {

@@ -174,6 +174,89 @@ TEST(SensorBankTest, DuplicateStallSensorsRejected)
                   ungula::motor::ErrorCode::InvalidConfig);
 }
 
+TEST(SensorBankTest, IsAssertedLiveReportsNcSensorAsHeld)
+{
+        // Host gpio stub reads LOW (false) for every pin → for a
+        // NormallyClosed sensor `active = !level = true`. This
+        // simulates "wire intact and pressed/cut" — exactly the state
+        // a real E-stop button reads as.
+        SensorInputConfig cfg;
+        cfg.pin = 11;
+        cfg.role = SensorRole::EmergencyStop;
+        cfg.polarity = SensorPolarity::NormallyClosed;
+
+        FakePulseEngine engine;
+        SensorBank bank;
+        ASSERT_TRUE(bank.begin(&cfg, 1, &engine).ok());
+
+        EXPECT_TRUE(bank.isAssertedLive(SensorRole::EmergencyStop));
+        // The ISR latch was NOT set (no edge fired) — the live read
+        // is the only thing that can see this state.
+        EXPECT_FALSE(bank.isActive(SensorRole::EmergencyStop));
+}
+
+TEST(SensorBankTest, IsAssertedLiveSilentForNoSensorWhenLow)
+{
+        SensorInputConfig cfg;
+        cfg.pin = 12;
+        cfg.role = SensorRole::EmergencyStop;
+        cfg.polarity = SensorPolarity::NormallyOpen;
+
+        FakePulseEngine engine;
+        SensorBank bank;
+        ASSERT_TRUE(bank.begin(&cfg, 1, &engine).ok());
+
+        EXPECT_FALSE(bank.isAssertedLive(SensorRole::EmergencyStop));
+}
+
+TEST(SensorBankTest, IsAssertedLiveMatchesRequestedRoleOnly)
+{
+        // Two NC sensors with different roles. The live read should only
+        // return true for the role being queried, not for any NC sensor.
+        SensorInputConfig cfgs[2];
+        cfgs[0].pin = 13;
+        cfgs[0].role = SensorRole::EmergencyStop;
+        cfgs[0].polarity = SensorPolarity::NormallyClosed;
+        cfgs[1].pin = 14;
+        cfgs[1].role = SensorRole::CrashLimit;
+        cfgs[1].polarity = SensorPolarity::NormallyClosed;
+
+        FakePulseEngine engine;
+        SensorBank bank;
+        ASSERT_TRUE(bank.begin(cfgs, 2, &engine).ok());
+
+        EXPECT_TRUE(bank.isAssertedLive(SensorRole::EmergencyStop));
+        EXPECT_TRUE(bank.isAssertedLive(SensorRole::CrashLimit));
+        // No Home sensor — should be false even though the host reads LOW.
+        EXPECT_FALSE(bank.isAssertedLive(SensorRole::Home));
+}
+
+TEST(SensorBankTest, NotifyMotionEndDisarmsStallWindow)
+{
+        // After notifyMotionEnd(), a subsequent service tick must not
+        // latch a stall regardless of how many hits accumulated before
+        // — but more importantly, the ISR (which we can't fire on
+        // host) would not call haltFromIsr because armedAt == 0. We
+        // can only assert the latch behaviour here.
+        SensorInputConfig cfg;
+        cfg.pin = 26;
+        cfg.role = SensorRole::Stall;
+        cfg.polarity = SensorPolarity::NormallyOpen;
+        cfg.stallHitsToTrigger = 1;
+        cfg.stallArmDelayMs = 0;
+
+        FakePulseEngine engine;
+        SensorBank bank;
+        ASSERT_TRUE(bank.begin(&cfg, 1, &engine).ok());
+
+        bank.notifyMotionStart(100);
+        bank.notifyMotionEnd();
+        // Even at "past the arm window", the service tick should not
+        // promote stale hits into a latch because armedAt is 0.
+        bank.service(500);
+        EXPECT_FALSE(bank.consumeStallActivation());
+}
+
 TEST(SensorBankTest, ServiceDoesNotCrashOnPolledSensors)
 {
         SensorInputConfig cfgs[2];

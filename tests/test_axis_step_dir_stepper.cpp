@@ -149,6 +149,61 @@ TEST(AxisStepDirStepperTest, CreateCanServoIsUnsupportedInPhaseD)
         EXPECT_EQ(r.error(), ErrorCode::Unsupported);
 }
 
+TEST(AxisStepDirStepperTest, SafetyInterlockReportsHeldEstop)
+{
+        // Host gpio stub reads LOW for every pin. A NormallyClosed
+        // E-stop interprets LOW as "asserted" (the polarity model in
+        // the codebase). The opt-in `isSafetyInterlockActive()` query
+        // must report this without blocking `enable()` — the host
+        // chooses whether to gate on the query depending on wiring.
+        StepDirStepperAxisConfig cfg = makeStepperCfg();
+        cfg.sensors[0].pin = 22;
+        cfg.sensors[0].role = SensorRole::EmergencyStop;
+        cfg.sensors[0].polarity = SensorPolarity::NormallyClosed;
+        cfg.sensorCount = 1;
+
+        auto r = Axis::createStepDirStepper(cfg);
+        ASSERT_TRUE(r.ok());
+        auto axis = r.takeValue();
+        ASSERT_TRUE(axis->begin().ok());
+
+        EXPECT_TRUE(axis->isSafetyInterlockActive());
+        // enable() does NOT auto-gate — verifies the regression where
+        // an inverted-polarity wiring would block boot. Hosts that
+        // want the gate call the interlock themselves.
+        EXPECT_TRUE(axis->enable().ok());
+        EXPECT_EQ(axis->state(), AxisState::Idle);
+}
+
+TEST(AxisStepDirStepperTest, SafetyInterlockReportsHeldCrashLimit)
+{
+        StepDirStepperAxisConfig cfg = makeStepperCfg();
+        cfg.sensors[0].pin = 25;
+        cfg.sensors[0].role = SensorRole::CrashLimit;
+        cfg.sensors[0].polarity = SensorPolarity::NormallyClosed;
+        cfg.sensorCount = 1;
+
+        auto r = Axis::createStepDirStepper(cfg);
+        ASSERT_TRUE(r.ok());
+        auto axis = r.takeValue();
+        ASSERT_TRUE(axis->begin().ok());
+
+        EXPECT_TRUE(axis->isSafetyInterlockActive());
+}
+
+TEST(AxisStepDirStepperTest, SafetyInterlockSilentWhenNoIsrSafetySensors)
+{
+        // No E-stop / crash-limit configured → interlock query is
+        // always false. enable() succeeds.
+        auto r = Axis::createStepDirStepper(makeStepperCfg());
+        ASSERT_TRUE(r.ok());
+        auto axis = r.takeValue();
+        ASSERT_TRUE(axis->begin().ok());
+        EXPECT_FALSE(axis->isSafetyInterlockActive());
+        EXPECT_TRUE(axis->enable().ok());
+        EXPECT_EQ(axis->state(), AxisState::Idle);
+}
+
 TEST(AxisStepDirStepperTest, OwnershipDestructsCleanly)
 {
         // No explicit assertions — this test exists so the address

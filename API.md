@@ -33,8 +33,9 @@ build-dependency minimisation.
 ```cpp
 #include <ungula/motor/result.h>              // Result<T>, Status, ErrorCode
 #include <ungula/motor/axis_types.h>          // Direction, StopMode, Distance, Position, TrajectoryLimits, UnitScaling
-#include <ungula/motor/axis_state.h>          // AxisState, StopReason, FaultCode, FaultStatus
+#include <ungula/motor/axis_state.h>          // AxisState, StopReason, FaultCode, FaultStatus, IdlePolicy
 #include <ungula/motor/axis_config.h>         // StepDirStepperAxisConfig, StepDirServoAxisConfig, CanServoAxisConfig
+#include <ungula/motor/motion_units.h>        // Speed, Acceleration, SpeedUnit, AccelerationUnit, apply* helpers
 #include <ungula/motor/axis.h>                // Axis facade + factories
 #include <ungula/motor/events/axis_event.h>   // AxisEvent, AxisEventType, IAxisEventListener
 #include <ungula/motor/planning/motion_planner.h>
@@ -45,6 +46,7 @@ build-dependency minimisation.
 #include <ungula/motor/homing/i_homing_axis.h>
 #include <ungula/motor/homing/homing_controller.h>
 #include <ungula/motor/homing/limit_switch_homing_strategy.h>
+#include <ungula/motor/homing/stall_homing_strategy.h>
 
 // Actuators and pulse engines — needed when composing manually.
 #include <ungula/motor/actuator/i_axis_actuator.h>
@@ -63,6 +65,7 @@ build-dependency minimisation.
 #include <ungula/motor/drivers/tmc2209/tmc2209_configurator.h>
 #include <ungula/motor/drivers/tmc2209/tmc2209_diagnostics.h>
 #include <ungula/motor/drivers/tmc2209/tmc2209_stallguard.h>
+#include <ungula/motor/drivers/tmc2209/tmc2209_coolstep.h>
 ```
 
 ---
@@ -241,12 +244,19 @@ When to use this: host integration tests, custom timer backends, or alternative 
 | **Motion** | `moveTo(target, unit = Steps)` | `Status` |
 | | `moveBy(delta, unit = Steps)` | `Status` |
 | | `jog(direction)` | `Status` |
+| | `jog(direction, Speed)` | `Status` (per-jog feed override) |
 | | `stop(mode = Immediate)` | `Status` (`Decelerate` → `Unsupported`) |
 | | `emergencyStop()` | `Status` |
+| **Trajectory tuning** | `setMaxVelocity(Speed)` | `Status` (live during jog; next-motion during in-flight `moveTo`/`moveBy`) |
+| | `setAcceleration(Acceleration)` | `Status` (next-motion only) |
+| | `setDeceleration(Acceleration)` | `Status` (next-motion only) |
+| | `setRampProfile(Acceleration)` | `Status` (accel == decel) |
 | **Homing** | `setHomingStrategy(strategy, timeoutMs = 0)` | `Status` |
 | | `home()` | `Status` |
 | | `isHoming()` / `isHomed()` | `bool` |
 | | `homingPhase()` | `HomingPhase` |
+| **Idle** | `setDefaultIdlePolicy(IdlePolicy)` | `void` |
+| | `defaultIdlePolicy()` | `IdlePolicy` |
 | **Faults** | `clearFault()` | `Status` |
 | | `faultStatus()` | `FaultStatus` |
 | **Queries** | `state()` | `AxisState` |
@@ -271,6 +281,165 @@ enum class AxisState : uint8_t {
 ```
 
 Transitions are explicit — no auto-clearing terminal states. `clearFault()` returns from `Faulted` / `EmergencyStopped` to **`Disabled`** (not `Idle`). The host must explicitly `enable()` again before commanding motion — eliminates the "motor jumped after clearFault" failure mode.
+
+---
+
+## User-unit Speed and Acceleration
+
+```cpp
+#include <ungula/motor/motion_units.h>
+```
+
+`Speed` and `Acceleration` are tiny value-types pairing a magnitude with
+a unit enum. Resolved to internal `Velocity` (steps/sec) and
+steps/sec² against `UnitScaling` (`stepsPerMm` for linear units,
+`stepsPerDegree` for rotary). Magnitudes are non-negative — `Direction`
+expresses sign.
+
+```cpp
+struct Speed         { float value; SpeedUnit         unit; };
+struct Acceleration  { float value; AccelerationUnit  unit; };
+```
+
+Named factories:
+
+```cpp
+Speed::stepsPerSec(...) / mmPerSec / mmPerMin / cmPerSec / cmPerMin /
+inchesPerSec / inchesPerMin / degreesPerSec / rpm / rps;
+
+Acceleration::stepsPerSecSquared(...) / mmPerSecSquared / cmPerSecSquared /
+inchesPerSecSquared / degreesPerSecSquared / rpmPerSec / rpsPerSec;
+```
+
+Resolvers — return `InvalidConfig` if the unit needs a scaling field that
+is zero, or if the magnitude is negative / overflows the target integer:
+
+```cpp
+Result<Velocity> toStepsPerSec       (Speed,        const UnitScaling&);
+Result<uint32_t> toStepsPerSecSquared(Acceleration, const UnitScaling&);
+```
+
+Setup-time helpers for the user's `TrajectoryLimits` (does not need the
+axis instance):
+
+```cpp
+Status applyMaxVelocity (TrajectoryLimits&, Speed,        const UnitScaling&);
+Status applyAcceleration(TrajectoryLimits&, Acceleration, const UnitScaling&);
+Status applyDeceleration(TrajectoryLimits&, Acceleration, const UnitScaling&);
+Status applyRampProfile (TrajectoryLimits&, Acceleration, const UnitScaling&);  // accel == decel
+```
+
+### Use case: configure in mm/s and rpm
+
+```cpp
+StepDirStepperAxisConfig cfg;
+cfg.common.units.stepsPerMm     = 80.0f;
+cfg.common.units.stepsPerDegree = 8.889f;
+
+applyMaxVelocity (cfg.common.limits, Speed::mmPerSec(150.0f),               cfg.common.units);
+applyAcceleration(cfg.common.limits, Acceleration::mmPerSecSquared(500.0f), cfg.common.units);
+applyDeceleration(cfg.common.limits, Acceleration::mmPerSecSquared(500.0f), cfg.common.units);
+
+auto axis = Axis::createStepDirStepper(cfg).takeValue();
+axis->begin();
+axis->enable();
+axis->jog(Direction::Forward, Speed::rpm(60.0f));     // per-jog feed override
+```
+
+### Live tuning semantics
+
+The runtime setters intentionally have different semantics by mutation
+kind:
+
+| Setter | While `Jogging` | While `Moving` (moveTo/moveBy in flight) | While `Idle` |
+| --- | --- | --- | --- |
+| `setMaxVelocity` | Stops + re-arms the jog at the new feed (brief glitch, no fault) | Locked — in-flight segments already precomputed. Applies on the next motion. | Applies to the next motion |
+| `setAcceleration` | Applies to the next motion | Applies to the next motion | Applies to the next motion |
+| `setDeceleration` | Applies to the next motion | Applies to the next motion | Applies to the next motion |
+| `setRampProfile` | Applies to the next motion | Applies to the next motion | Applies to the next motion |
+
+Accel/decel are next-motion-only because mid-flight ramp changes would
+require splicing fresh ramps into the segment queue — the engine doesn't
+support that today and silently degrading would be a safety bug.
+
+---
+
+## Idle policy
+
+```cpp
+#include <ungula/motor/axis_state.h>
+
+enum class IdlePolicy : uint8_t {
+    HoldCurrent = 0,    // default — keep enabled; chip falls to IHOLD after iHoldDelay
+    AutoDisable = 1,    // drop EN at every motion end; coils freewheel
+};
+
+void       Axis::setDefaultIdlePolicy(IdlePolicy);
+IdlePolicy Axis::defaultIdlePolicy() const;
+```
+
+The policy is implemented inside the Axis as a built-in event listener
+that observes `MotionCompleted` / `MotionStopped`. It coexists with any
+custom `IAxisEventListener` you subscribe.
+
+### Use case: built-in `AutoDisable`
+
+```cpp
+axis->setDefaultIdlePolicy(IdlePolicy::AutoDisable);
+// next moveBy/moveTo/jog completes → axis automatically calls disable()
+// The host must explicitly enable() again before the next motion.
+```
+
+### Use case: equivalent custom listener (`AutoDisableOnIdle`)
+
+This is the user-extensible shape behind the built-in policy. Reach for
+this when you want to do MORE than just disable at idle (signal a
+pillar, kick a brake solenoid, log the cycle, ...).
+
+```cpp
+#include <ungula/motor/axis.h>
+#include <ungula/motor/events/axis_event.h>
+
+using namespace ungula::motor;
+
+class AutoDisableOnIdle final : public IAxisEventListener {
+public:
+    explicit AutoDisableOnIdle(Axis& axis) : axis_(axis) {}
+
+    void onAxisEvent(const AxisEvent& ev) override {
+        switch (ev.type) {
+        case AxisEventType::MotionCompleted:
+        case AxisEventType::MotionStopped:
+            (void) axis_.disable();
+            break;
+        default:
+            break;
+        }
+    }
+
+private:
+    Axis& axis_;
+};
+
+AutoDisableOnIdle idleListener(*axis);
+axis->subscribe(&idleListener);
+```
+
+If you use a custom listener that already drops the EN pin, keep the
+built-in policy at `HoldCurrent` — otherwise `disable()` is called twice
+per motion end. Harmless on the chip side (idempotent) but the second
+call's `Status` will surface a state-machine warning.
+
+`AutoDisable` semantics:
+
+- The host must call `enable()` again before each motion command. There
+  is no automatic re-enable — same shape as `clearFault()` returning to
+  `Disabled` rather than `Idle`.
+- Coils freewheel at rest. The carrier is held only by friction or a
+  mechanical brake. Don't use this on direct-drive vertical axes that
+  rely on holding torque.
+- Power dissipation drops to zero at rest. Right for thermally-bound
+  small steppers idling for long periods.
 
 ---
 
@@ -464,6 +633,22 @@ In 3.0.0 the actuator returns `ErrorCode::Unsupported` from motion methods when 
 | `TravelLimit` | Polled, debounced | Soft limits — service-tick reaction |
 | `CrashLimit` | GPIO ISR → `engine.haltFromIsr()` | Hard limits — sub-µs halt |
 | `EmergencyStop` | GPIO ISR → `engine.haltFromIsr()` + latch | E-stop circuits |
+| `Stall` | GPIO ISR with hit-count + arm-delay debounce | TMC2209 DIAG. Reports `StopReason::StallDetected` + `FaultCode::Stall`. During an active homing cycle the Axis treats the stall as a success signal (soft-stop, no fault). |
+
+### Stall-sensor debounce knobs (role == `Stall` only)
+
+```cpp
+SensorInputConfig s;
+s.role               = SensorRole::Stall;
+s.stallHitsToTrigger = 4;     // ISR edges required before latching a stall
+s.stallArmDelayMs    = 200;   // ms after motion start during which edges are ignored
+```
+
+The StealthChop auto-tune phase tends to glitch DIAG once or twice in the
+first ~100 ms of motion. `stallHitsToTrigger` rejects a single spurious
+pulse; `stallArmDelayMs` ignores the entire startup transient. Real stalls
+hold DIAG high — the chip continues to pulse it as long as `SG_RESULT <
+2*SGTHRS`, so several hits in a single service tick is the normal case.
 
 ### Use case: a home reference + a hardware E-stop
 
@@ -562,6 +747,42 @@ if (axis->isHomed()) {
 
 The strategy must outlive any active homing cycle. Passing `timeoutMs=0` disables the timeout (use carefully — a stuck mechanism will never report Failed).
 
+### Use case: stall-based homing (sensorless)
+
+For axes that home against a mechanical hard-stop instead of a wired
+switch. Same FSM shape as `LimitSwitchHomingStrategy` but the strategy
+reads `axis.isStallActive()` rather than `axis.isHomeActive()`.
+
+Preconditions:
+
+- A `SensorRole::Stall` sensor wired to the TMC2209 DIAG pin.
+- The chip in **StealthChop** mode (StallGuard4 is StealthChop-only).
+- `Tmc2209StallGuard::begin()` called with valid SGTHRS / TCOOLTHRS for
+  the load. `verifyChopperMode = true` (the default) refuses the config
+  if GCONF says SpreadCycle.
+
+```cpp
+#include <ungula/motor/homing/stall_homing_strategy.h>
+
+using namespace ungula::motor;
+
+StallHomingStrategy::Config c;
+c.approachDirection = Direction::Backward;
+c.fastFeedSps       = 1500;
+c.slowFeedSps       = 200;
+c.backoffSteps      = 200;
+c.homePositionSteps = 0;
+StallHomingStrategy strategy(c);
+
+axis->setHomingStrategy(&strategy, /*timeoutMs=*/30000);
+axis->home();
+```
+
+The Axis tracks stall-during-homing internally: a stall is a success
+signal for the strategy (soft-stop, no fault), but the same stall
+outside a homing cycle raises `FaultCode::Stall` with
+`StopReason::StallDetected`.
+
 ### Use case: writing a custom strategy
 
 ```cpp
@@ -591,7 +812,7 @@ private:
 };
 ```
 
-`IHomingAxis` is the narrowed view: `commandMove`, `commandJog`, `stopMove`, `isHomeActive`, `isMotionIdle`, `resetPosition`. Strategies cannot call `Axis::moveTo` / `home` / `subscribe` etc. — this prevents deadlocks against the public command API.
+`IHomingAxis` is the narrowed view: `commandMove`, `commandJog`, `stopMove`, `isHomeActive`, `isStallActive`, `isMotionIdle`, `resetPosition`. Strategies cannot call `Axis::moveTo` / `home` / `subscribe` etc. — this prevents deadlocks against the public command API. `isStallActive()` is the per-cycle latch the Axis sets when a stall fires during homing; it's cleared on the next `commandMove` / `commandJog`.
 
 ---
 
@@ -676,9 +897,9 @@ Listeners are invoked from `Axis::service()` (which calls `serviceEvents()` inte
 #include <ungula/motor/drivers/tmc2209/tmc2209_stallguard.h>
 ```
 
-Three single-responsibility components share one `ITmcUart` transport.
+Four single-responsibility components share one `ITmcUart` transport.
 
-### Use case: boot configuration
+### Use case: boot configuration (mA-based currents)
 
 ```cpp
 #include <ungula/hal/uart/uart.h>
@@ -695,15 +916,39 @@ void setup() {
     uart.begin(115200, /*tx=*/17, /*rx=*/16);
 
     tmc::Tmc2209Configurator::Config c;
-    c.runCurrent  = 16;
-    c.holdCurrent = 8;
-    c.microsteps  = tmc::Microsteps::Sixteenth;
-    c.mode        = tmc::ChopperMode::StealthChop;
-    c.toff        = 3;
-    c.interpolate = true;
+    c.runCurrentMa        = 800;      // mA RMS at the coil
+    c.holdCurrentMa       = 300;      // typically 30..50% of runCurrentMa
+    c.iHoldDelay          = 1;        // ~21 ms IRUN → IHOLD on standstill
+    c.senseResistorOhms   = 0.11f;    // check the silk screen on your carrier
+    c.useHighSensitivity  = false;    // vsense bit — true for <300 mA setups
+    c.microsteps          = tmc::Microsteps::Sixteenth;
+    c.mode                = tmc::ChopperMode::StealthChop;
+    c.toff                = 3;
+    c.interpolate         = true;
     config.begin(c);             // writes GCONF, CHOPCONF, IHOLD_IRUN, GSTAT
 }
 ```
+
+Validation: `runCurrentMa > 0`, `holdCurrentMa <= runCurrentMa`,
+`senseResistorOhms > 0`. Invalid values return `InvalidConfig` before
+any UART traffic.
+
+### mA ↔ CS conversion helpers
+
+```cpp
+// Both helpers are static — useful for UIs that show mA and CS side by
+// side, or for compile-time sanity checks.
+const uint8_t  cs   = tmc::Tmc2209Configurator::milliampsToCs(600, 0.11f);
+const uint16_t back = tmc::Tmc2209Configurator::csToMilliamps(cs,  0.11f);
+
+// Runtime change — reuses the cached senseResistorOhms / vsense flag
+// from the last begin(). One UART write (~700 µs at 115200 baud).
+config.setCurrents(/*runMa=*/600, /*holdMa=*/200, /*iHoldDelay=*/1);
+```
+
+Conversion formula: `CS = round(I_rms · 32 · √2 · (R_sense + 0.02) / V_fs) - 1`,
+clamped to 0..31. `V_fs` is 0.325 V at vsense=0 and 0.180 V at
+vsense=1; the 0.02 Ω term is the chip's internal MOSFET resistance.
 
 `Tmc2209Configurator::clearGstat()` writes the W1C mask (real W1C — the original driver had a read bug here). `begin()` never reads from the chip; diagnostics live elsewhere.
 
@@ -735,14 +980,53 @@ namespace tmc = ungula::motor::tmc2209;
 tmc::Tmc2209StallGuard sg(transport);
 
 tmc::Tmc2209StallGuard::Config sCfg;
-sCfg.sgThreshold = 10;           // SG_RESULT < 2*SGTHRS → stall
-sCfg.tCoolThrs   = 0x1000;       // enable SG above this velocity
-sg.begin(sCfg);
+sCfg.sgThreshold       = 10;        // SG_RESULT < 2*SGTHRS → stall
+sCfg.tCoolThrs         = 0xFFFFF;   // active at any non-zero velocity
+sCfg.verifyChopperMode = true;      // refuses to configure in SpreadCycle (default)
+sg.begin(sCfg);                     // returns InvalidConfig if chip is in SpreadCycle
 ```
 
-The chip pulses DIAG high on a stall. Wire DIAG to a `SensorRole::CrashLimit` sensor on the Axis side; the GPIO ISR will halt the pulse engine immediately. No UART traffic during motion.
+The chip pulses DIAG high on a stall. Wire DIAG to a `SensorRole::Stall` sensor on the Axis side; the GPIO ISR with hit-count + arm-delay debounce halts the pulse engine and (during a homing cycle) advances the strategy.
+
+`verifyChopperMode = true` (the default) reads GCONF first and refuses
+to write SGTHRS / TCOOLTHRS if `EN_SPREADCYCLE` is set — StallGuard4 is
+StealthChop-only on the TMC2209. Set this to `false` only if you are
+deliberately preparing the registers before flipping back to
+StealthChop.
 
 For tuning, an opt-in `readSgResult()` is available — strictly off the motion-timing path.
+
+### Use case: CoolStep (load-based dynamic current)
+
+CoolStep is **independent** from StallGuard. They share `SG_RESULT`
+(both read it) and `TCOOLTHRS` (either can write it). Use either alone,
+or both together — when running both, set `tCoolThrs` on one and leave
+the other at `0` (skip writing) so the second one inherits the first's
+value.
+
+```cpp
+#include <ungula/motor/drivers/tmc2209/tmc2209_coolstep.h>
+
+namespace tmc = ungula::motor::tmc2209;
+tmc::Tmc2209CoolStep cool(transport);
+
+tmc::Tmc2209CoolStep::Config cs;
+cs.loadThresholdToIncrease       = 4;   // SEMIN — 1..15 enables, 0 disables
+cs.loadThresholdToDecreaseMargin = 2;   // SEMAX — hysteresis width
+cs.currentRampUp                 = tmc::Tmc2209CoolStep::StepWidth::Step1;
+cs.currentRampDown               = tmc::Tmc2209CoolStep::StepWidth::Step2;
+cs.currentFloor                  = tmc::Tmc2209CoolStep::CurrentFloor::Half;  // IRUN/2 floor
+cs.tCoolThrs                     = 0;   // leave StallGuard's TCOOLTHRS untouched
+cool.begin(cs);
+
+// Disable at runtime — clears SEMIN only. Other fields remain so a
+// subsequent begin() doesn't need to repeat them.
+cool.disable();
+```
+
+`StepWidth` (SEUP / SEDN) is the per-tick current step: `Step1` is
+gentle, `Step8` is aggressive. `CurrentFloor` (SEIMIN) caps how low
+CoolStep can go at light load — `Half` = IRUN/2, `Quarter` = IRUN/4.
 
 ### Custom UART transport (e.g. RS-485 bridge)
 
@@ -845,4 +1129,26 @@ Hard rules — violations cause crashes or silent data corruption:
 
 ## Versioning
 
-3.0.0 is the first production release of the refactored architecture. Phases A through G land in this release. Future minor versions will fill in the deferred items listed in [`README.md`](README.md) (concrete `ICanServoProtocol`, `StallHomingStrategy`, `IndexPulseHomingStrategy`, mid-flight `stop(Decelerate)` re-planning, `PulseMode::External` host ticking).
+3.0.0 was the first production release of the refactored architecture.
+
+3.1.0 adds:
+
+- Typed `Speed` / `Acceleration` user-unit value-types and the `apply*`
+  helpers; per-jog feed override and live `setMaxVelocity` semantics.
+- `IdlePolicy` (`HoldCurrent` / `AutoDisable`) implemented as a built-in
+  event listener; coexists with custom `IAxisEventListener` subscriptions.
+- `SensorRole::Stall` with hit-count + arm-delay debounce, dedicated
+  `StopReason::StallDetected` + `FaultCode::Stall`, and during-homing
+  soft-stop routing (stall is a success signal, not a fault, while
+  `home()` is active).
+- `StallHomingStrategy` — sensorless homing against a mechanical stop.
+- `Tmc2209Configurator` mA-based current API + `milliampsToCs` /
+  `csToMilliamps` helpers + `useHighSensitivity` (vsense) selection.
+- `Tmc2209StallGuard::Config::verifyChopperMode` — refuses to configure
+  if the chip is in SpreadCycle.
+- `Tmc2209CoolStep` — independent load-based dynamic current scaling.
+
+Future minor versions will fill in the deferred items listed in
+[`README.md`](README.md) (concrete `ICanServoProtocol`,
+`IndexPulseHomingStrategy`, mid-flight `stop(Decelerate)` re-planning,
+`PulseMode::External` host ticking).

@@ -4,6 +4,7 @@
 
 #include "ungula/motor/limits/sensor_bank.h"
 
+#include "ungula/core/time/time.h"
 #include "ungula/hal/gpio/gpio.h"
 
 namespace ungula::motor
@@ -18,19 +19,6 @@ namespace
         {
                 return r == SensorRole::CrashLimit || r == SensorRole::EmergencyStop ||
                        r == SensorRole::Stall;
-        }
-
-        constexpr StopReason isrStopReason(SensorRole r)
-        {
-                switch (r) {
-                case SensorRole::EmergencyStop:
-                        return StopReason::EmergencyStop;
-                case SensorRole::Stall:
-                        return StopReason::StallDetected;
-                case SensorRole::CrashLimit:
-                default:
-                        return StopReason::LimitSwitch;
-                }
         }
 
 } // namespace
@@ -51,30 +39,43 @@ UNGULA_ISR_ATTR void SensorBank::onIsrTrampoline(void *ctx)
 
         SensorBank *self = binding->bank;
 
-        // Halt the pulse engine FIRST. Latency on this path is the whole
-        // point of wiring an ISR — drop everything else, get the steps
-        // to stop, then bookkeep. NOTE: for Stall we halt unconditionally
-        // here even though the task-context service path may still
-        // discard the event as "inside arm window". The cost of a
-        // discarded halt is a short motion glitch; the cost of NOT
-        // halting in the ISR is steps continuing through a real stall
-        // until the next service tick. Halt wins.
-        if (self->engineForIsr_) {
-                self->engineForIsr_->haltFromIsr(isrStopReason(binding->role));
-        }
-
+        // For E-stop and crash limits: halt FIRST. Latency on these
+        // paths is the whole point of wiring an ISR — drop everything
+        // else, get the steps to stop, then bookkeep.
+        //
+        // For Stall: halt only if the arm window has elapsed. Inside
+        // the arm window (StealthChop auto-tune transient, etc.) we
+        // just count the hit; halting there would latch the engine
+        // fault and force the host to `clearFault()` on every motor
+        // bring-up. Real stalls past the window still halt instantly.
         switch (binding->role) {
         case SensorRole::EmergencyStop:
+                if (self->engineForIsr_) {
+                        self->engineForIsr_->haltFromIsr(StopReason::EmergencyStop);
+                }
                 self->estopLatched_.store(true, std::memory_order_release);
                 break;
-        case SensorRole::Stall:
-                // Count this hit. Task-context service() decides if the
-                // count exceeds the threshold AND we're past the arm
-                // window, only then latching the stall as visible.
+        case SensorRole::Stall: {
                 self->stallHitCounter_.fetch_add(1, std::memory_order_acq_rel);
+                const int64_t armedAt =
+                        self->stallArmedAtMs_.load(std::memory_order_acquire);
+                if (armedAt == 0)
+                        break; // no motion in progress; no halt, no fault
+                const int64_t now = ungula::core::time::millis();
+                if (now - armedAt <
+                    static_cast<int64_t>(self->stallArmDelayMs_)) {
+                        break; // inside arm window; ignore
+                }
+                if (self->engineForIsr_) {
+                        self->engineForIsr_->haltFromIsr(StopReason::StallDetected);
+                }
                 break;
+        }
         case SensorRole::CrashLimit:
         default:
+                if (self->engineForIsr_) {
+                        self->engineForIsr_->haltFromIsr(StopReason::LimitSwitch);
+                }
                 self->crashLatched_.store(true, std::memory_order_release);
                 break;
         }
@@ -215,7 +216,7 @@ void SensorBank::end()
         stallHitCounter_.store(0, std::memory_order_release);
         stallHitsToTrigger_ = 4;
         stallArmDelayMs_ = 200;
-        stallArmedAtMs_ = 0;
+        stallArmedAtMs_.store(0, std::memory_order_release);
         begun_ = false;
 }
 
@@ -260,9 +261,10 @@ void SensorBank::service(int64_t nowMs)
         //      returns.
         const uint32_t hits = stallHitCounter_.load(std::memory_order_acquire);
         if (hits > 0) {
-                const bool armed = (stallArmedAtMs_ != 0);
+                const int64_t armedAt = stallArmedAtMs_.load(std::memory_order_acquire);
+                const bool armed = (armedAt != 0);
                 const bool pastWindow =
-                        armed && (nowMs - stallArmedAtMs_) >=
+                        armed && (nowMs - armedAt) >=
                                          static_cast<int64_t>(stallArmDelayMs_);
 
                 if (!armed || !pastWindow) {
@@ -343,7 +345,37 @@ void SensorBank::notifyMotionStart(int64_t nowMs)
         // into the next jog and trip stallHitsToTrigger artificially
         // early.
         stallHitCounter_.store(0, std::memory_order_release);
-        stallArmedAtMs_ = nowMs;
+        // Use release ordering so the ISR (which loads with acquire)
+        // never observes the new armed-at timestamp before the counter
+        // reset becomes visible. If nowMs happens to be 0 — only
+        // possible on the host backend in the very first millisecond
+        // of process life — bump to 1 so the ISR's "armedAt == 0
+        // means not armed" sentinel still works.
+        stallArmedAtMs_.store(nowMs == 0 ? 1 : nowMs, std::memory_order_release);
+}
+
+void SensorBank::notifyMotionEnd()
+{
+        // Disarm the stall window so a DIAG glitch on the trailing edge
+        // of the just-finished motion (current-decay transient, mechanical
+        // bounce) doesn't reach `haltFromIsr` and trip the engine fault.
+        // The counter is left alone — if the service tick hasn't drained
+        // it yet, it still needs to do so.
+        stallArmedAtMs_.store(0, std::memory_order_release);
+}
+
+bool SensorBank::isAssertedLive(SensorRole role) const
+{
+        if (!begun_)
+                return false;
+        for (uint8_t i = 0; i < slotCount_; ++i) {
+                const Slot &s = slots_[i];
+                if (!s.inUse || s.cfg.role != role)
+                        continue;
+                if (readActive(s.cfg))
+                        return true;
+        }
+        return false;
 }
 
 uint8_t SensorBank::homePin() const

@@ -24,8 +24,9 @@ TEST(Tmc2209ConfiguratorTest, BeginWritesExpectedRegistersInOrder)
         Tmc2209Configurator cfg(uart);
 
         Tmc2209Configurator::Config c;
-        c.runCurrent = 16;
-        c.holdCurrent = 8;
+        c.runCurrentMa = 800;
+        c.holdCurrentMa = 400;
+        c.senseResistorOhms = 0.11f;
         c.microsteps = Microsteps::Sixteenth;
         c.mode = ChopperMode::StealthChop;
 
@@ -70,9 +71,51 @@ TEST(Tmc2209ConfiguratorTest, RejectsInvalidCurrents)
         Tmc2209Configurator cfg(uart);
 
         Tmc2209Configurator::Config c;
-        c.runCurrent = 32; // out of range (max 31)
+        c.runCurrentMa = 0; // zero run current makes no sense
         EXPECT_EQ(cfg.begin(c).error(), ErrorCode::InvalidConfig);
         EXPECT_EQ(uart.writeCallCount, 0u); // nothing written on bad input
+
+        Tmc2209Configurator::Config c2;
+        c2.runCurrentMa = 500;
+        c2.holdCurrentMa = 900; // hold > run is invalid
+        EXPECT_EQ(cfg.begin(c2).error(), ErrorCode::InvalidConfig);
+
+        Tmc2209Configurator::Config c3;
+        c3.senseResistorOhms = 0.0f; // zero sense resistor
+        EXPECT_EQ(cfg.begin(c3).error(), ErrorCode::InvalidConfig);
+}
+
+TEST(Tmc2209ConfiguratorTest, MilliampsToCsRoundTrip)
+{
+        // Sanity check the conversion against the datasheet formula.
+        // 0.11 Ω sense resistor, low-sensitivity (Vfs = 0.325 V).
+        // Datasheet: I_rms = (CS+1)/32 * 0.325 / 0.13 / √2
+        // For CS=15 → I_rms ≈ 0.706 A → 706 mA.
+        const uint16_t expectedMa =
+            Tmc2209Configurator::csToMilliamps(15, 0.11f, false);
+        EXPECT_GE(expectedMa, 690u);
+        EXPECT_LE(expectedMa, 720u);
+
+        // Round-trip: convert that mA value back to CS, should land at 15.
+        const uint8_t cs = Tmc2209Configurator::milliampsToCs(expectedMa, 0.11f, false);
+        EXPECT_EQ(cs, 15);
+}
+
+TEST(Tmc2209ConfiguratorTest, MilliampsToCsClampsAtMaxCurrent)
+{
+        // Ask for far more current than the chip can deliver at this
+        // sense resistor — should clamp to CS=31, not wrap.
+        const uint8_t cs = Tmc2209Configurator::milliampsToCs(5000, 0.11f, false);
+        EXPECT_EQ(cs, 31);
+}
+
+TEST(Tmc2209ConfiguratorTest, HighSensitivityScalesDifferently)
+{
+        // For a given mA target, the high-sensitivity (Vfs=0.18V) range
+        // produces a higher CS value than the default (Vfs=0.325V).
+        const uint8_t csLow = Tmc2209Configurator::milliampsToCs(200, 0.11f, false);
+        const uint8_t csHigh = Tmc2209Configurator::milliampsToCs(200, 0.11f, true);
+        EXPECT_GT(csHigh, csLow);
 }
 
 TEST(Tmc2209ConfiguratorTest, SetMicrostepsPreservesChopconfFields)

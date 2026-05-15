@@ -34,3 +34,4 @@
 #include "ungula/motor/homing/i_homing_axis.h"
 #include "ungula/motor/homing/homing_controller.h"
 #include "ungula/motor/homing/limit_switch_homing_strategy.h"
+#include "ungula/motor/homing/stall_homing_strategy.h"

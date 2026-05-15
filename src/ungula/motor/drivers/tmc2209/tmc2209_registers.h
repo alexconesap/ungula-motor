@@ -89,10 +89,25 @@ namespace drv_status
 /// CHOPCONF bit positions for the fields the configurator writes.
 namespace chopconf
 {
+        inline constexpr uint32_t VSENSE = 1u << 17; // Vfs scaling
         inline constexpr uint8_t MRES_SHIFT = 24; // 4-bit field
         inline constexpr uint32_t MRES_MASK = 0xFu << MRES_SHIFT;
         inline constexpr uint32_t INTPOL = 1u << 28;
         inline constexpr uint32_t DEDGE = 1u << 29;
 } // namespace chopconf
+
+/// COOLCONF bit positions / shifts for the CoolStep configurator.
+namespace coolconf
+{
+        inline constexpr uint8_t SEMIN_SHIFT = 0; // 4-bit field
+        inline constexpr uint32_t SEMIN_MASK = 0xFu << SEMIN_SHIFT;
+        inline constexpr uint8_t SEUP_SHIFT = 5; // 2-bit field
+        inline constexpr uint32_t SEUP_MASK = 0x3u << SEUP_SHIFT;
+        inline constexpr uint8_t SEMAX_SHIFT = 8; // 4-bit field
+        inline constexpr uint32_t SEMAX_MASK = 0xFu << SEMAX_SHIFT;
+        inline constexpr uint8_t SEDN_SHIFT = 13; // 2-bit field
+        inline constexpr uint32_t SEDN_MASK = 0x3u << SEDN_SHIFT;
+        inline constexpr uint32_t SEIMIN = 1u << 15; // current floor select
+} // namespace coolconf
 
 } // namespace ungula::motor::tmc2209

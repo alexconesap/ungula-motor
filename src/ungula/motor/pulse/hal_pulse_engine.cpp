@@ -307,11 +307,13 @@ Status HalPulseEngine::clearFault()
 
 /// Called from inside the ISR on any non-Ok return from the HAL timer.
 /// Latches a `DriverFault` and disarms the timer (best effort). Must be
-/// IRAM-safe; the placement attribute lives on this definition.
-static inline void IRAM_ATTR latchFaultFromIsr(std::atomic<bool> &running,
-                                               std::atomic<bool> &faulted,
-                                               std::atomic<StopReason> &finishedReason,
-                                               ungula::hal::timer::IHwTimer &timer)
+/// IRAM-safe; the placement attribute lives on this definition. Use the
+/// portable `UNGULA_ISR_ATTR` so the host build (where `IRAM_ATTR` is
+/// undefined) still compiles.
+static inline void UNGULA_ISR_ATTR latchFaultFromIsr(std::atomic<bool> &running,
+                                                     std::atomic<bool> &faulted,
+                                                     std::atomic<StopReason> &finishedReason,
+                                                     ungula::hal::timer::IHwTimer &timer)
 {
         running.store(false, std::memory_order_release);
         faulted.store(true, std::memory_order_release);

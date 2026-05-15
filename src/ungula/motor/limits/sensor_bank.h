@@ -105,6 +105,30 @@ class SensorBank {
         /// task context only.
         void notifyMotionStart(int64_t nowMs);
 
+        /// Notify the bank that motion has just ended. Disarms the
+        /// stall window so a DIAG glitch on the trailing edge of the
+        /// motion (current decay, mechanical bounce) does NOT get
+        /// counted as a real stall and trip the engine fault.
+        void notifyMotionEnd();
+
+        /// Live-level query for an ISR-driven role. Reads the GPIO pin
+        /// of every configured sensor whose role matches and returns
+        /// true if any of them is currently asserted (according to its
+        /// polarity), bypassing the ISR latch entirely.
+        ///
+        /// Used by `Axis::enable()` to gate re-enable while an E-stop
+        /// or crash-limit line is still physically held. The latches
+        /// `isActive()` consults are edge-only and consumed exactly
+        /// once — they can't tell you whether the line is still hot
+        /// right now. This call can.
+        ///
+        /// Safe for polled roles too (`Home`, `TravelLimit`) but the
+        /// debounced `isActive()` is preferred for those — this method
+        /// does a raw read with no filtering. For `Stall` the meaning
+        /// is "is DIAG currently asserted"; rarely useful at the host
+        /// because DIAG pulses very briefly.
+        bool isAssertedLive(SensorRole role) const;
+
         /// Pin number of the first home sensor configured, or `GPIO_NONE`
         /// if none. Convenience for homing strategies.
         uint8_t homePin() const;
@@ -152,11 +176,17 @@ class SensorBank {
         // Stall debounce state. Counter is incremented from ISR context;
         // service() reads + resets it from task context. Threshold and
         // arm window come from the first Stall sensor's config.
+        //
+        // `stallArmedAtMs_` is read by the ISR to decide whether to halt
+        // the engine: inside the arm window the ISR counts but does NOT
+        // halt, so a StealthChop auto-tune glitch can no longer roll up
+        // into an engine fault. Atomic so the ISR sees a consistent
+        // value after task-side publishing in `notifyMotionStart`.
         std::atomic<uint32_t> stallHitCounter_{ 0 };
         std::atomic<bool> stallLatched_{ false };
+        std::atomic<int64_t> stallArmedAtMs_{ 0 }; // 0 = not armed
         uint8_t stallHitsToTrigger_ = 4;
-        uint16_t stallArmDelayMs_ = 200;
-        int64_t stallArmedAtMs_ = 0; // start-of-motion timestamp; 0 = not armed
+        uint16_t stallArmDelayMs_ = 200; // written only in begin() (pre-ISR)
 
         bool begun_ = false;
 };

@@ -181,6 +181,59 @@ TEST(StepDirActuatorTest, FeedbackTracksEngine)
         EXPECT_TRUE(fb.inPosition);
 }
 
+TEST(StepDirActuatorTest, LimitSwitchFaultMapsToLimitExceeded)
+{
+        // The engine latches StopReason::LimitSwitch when a crash-limit
+        // ISR halts it. The Axis event path emits FaultCode::LimitExceeded
+        // for that reason; `faultStatus()` must agree — otherwise a
+        // listener and a status query see different fault codes for
+        // the same physical event.
+        FakePulseEngine engine;
+        StepDirActuator actuator(engine, makeCfg());
+        ASSERT_TRUE(actuator.begin().ok());
+        ASSERT_TRUE(actuator.enable().ok());
+        ASSERT_TRUE(actuator.armMotion(makeMove(Direction::Forward, 100)).ok());
+        ASSERT_TRUE(actuator.startMotion().ok());
+
+        engine.haltFromIsr(StopReason::LimitSwitch);
+
+        const auto fs = actuator.faultStatus();
+        EXPECT_TRUE(fs.active());
+        EXPECT_EQ(fs.code, FaultCode::LimitExceeded);
+}
+
+TEST(StepDirActuatorTest, TravelLimitFaultMapsToLimitExceeded)
+{
+        FakePulseEngine engine;
+        StepDirActuator actuator(engine, makeCfg());
+        ASSERT_TRUE(actuator.begin().ok());
+        ASSERT_TRUE(actuator.enable().ok());
+        ASSERT_TRUE(actuator.armMotion(makeMove(Direction::Forward, 100)).ok());
+        ASSERT_TRUE(actuator.startMotion().ok());
+
+        engine.haltFromIsr(StopReason::TravelLimit);
+
+        const auto fs = actuator.faultStatus();
+        EXPECT_TRUE(fs.active());
+        EXPECT_EQ(fs.code, FaultCode::LimitExceeded);
+}
+
+TEST(StepDirActuatorTest, StallFaultMapsToStall)
+{
+        FakePulseEngine engine;
+        StepDirActuator actuator(engine, makeCfg());
+        ASSERT_TRUE(actuator.begin().ok());
+        ASSERT_TRUE(actuator.enable().ok());
+        ASSERT_TRUE(actuator.armMotion(makeMove(Direction::Forward, 100)).ok());
+        ASSERT_TRUE(actuator.startMotion().ok());
+
+        engine.haltFromIsr(StopReason::StallDetected);
+
+        const auto fs = actuator.faultStatus();
+        EXPECT_TRUE(fs.active());
+        EXPECT_EQ(fs.code, FaultCode::Stall);
+}
+
 TEST(StepDirActuatorTest, InjectedEngineFaultSurfaces)
 {
         FakePulseEngine engine;

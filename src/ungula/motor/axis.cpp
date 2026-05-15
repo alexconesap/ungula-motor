@@ -235,6 +235,32 @@ Status Axis::enable()
         return Status::Ok();
 }
 
+bool Axis::isSafetyInterlockActive() const
+{
+        // Live read of every configured ISR-role safety sensor (E-stop,
+        // crash limit). Returns true if any of them reads "asserted"
+        // right now according to its polarity, bypassing the edge-only
+        // ISR latch.
+        //
+        // Use case: after `clearFault()`, the host wants to know whether
+        // it's actually safe to `enable()` again — i.e., whether the
+        // operator has released the E-stop button. The ISR latch only
+        // sees edges, so an operator who clears the fault while still
+        // holding the button is invisible to `lastStopReason()`. This
+        // call is.
+        //
+        // NOT wired into `enable()` automatically. The right behaviour
+        // depends on the host's wiring convention. A genuine fail-safe
+        // wire (line floats HIGH at rest, sinks to GND on press / cut)
+        // reads as "not asserted" here. A non-fail-safe wire (line
+        // sits LOW at rest because the NC contact shorts it to GND)
+        // reads as "asserted" at idle — which is correct for that
+        // wiring but would block boot if applied as a gate. Hosts
+        // call this where it makes sense for their setup.
+        return sensors_.isAssertedLive(SensorRole::EmergencyStop) ||
+               sensors_.isAssertedLive(SensorRole::CrashLimit);
+}
+
 Status Axis::disable()
 {
         if (state_ == AxisState::Uninitialized)
@@ -243,6 +269,7 @@ Status Axis::disable()
         if (!s.ok())
                 return s;
         motionInFlight_ = false;
+        sensors_.notifyMotionEnd();
         state_ = AxisState::Disabled;
         emitEvent(AxisEventType::StateChanged);
         return Status::Ok();
@@ -481,6 +508,7 @@ Status Axis::stop(StopMode mode)
 
         if (motionInFlight_) {
                 motionInFlight_ = false;
+                sensors_.notifyMotionEnd();
                 lastStopReason_ = StopReason::UserStop;
                 state_ = AxisState::Idle;
                 emitEvent(AxisEventType::MotionStopped, StopReason::UserStop);
@@ -499,6 +527,7 @@ Status Axis::emergencyStop()
                 return s;
 
         motionInFlight_ = false;
+        sensors_.notifyMotionEnd();
         state_ = AxisState::EmergencyStopped;
         lastStopReason_ = StopReason::EmergencyStop;
         emitEvent(AxisEventType::EmergencyStopped, StopReason::EmergencyStop,
@@ -654,8 +683,12 @@ void Axis::pumpSensors(int64_t nowMs)
 
         // Crash and E-stop are ISR-latched. The ISR has already halted
         // the pulse engine; here we just bookkeep state + emit events.
+        // Whichever path stops motion ALSO disarms the stall window —
+        // otherwise a stray DIAG pulse seconds later would still call
+        // `haltFromIsr` and re-fault an already-stopped axis.
         if (sensors_.consumeEstopActivation()) {
                 motionInFlight_ = false;
+                sensors_.notifyMotionEnd();
                 state_ = AxisState::EmergencyStopped;
                 lastStopReason_ = StopReason::EmergencyStop;
                 emitEvent(AxisEventType::LimitActivated, StopReason::EmergencyStop);
@@ -667,6 +700,7 @@ void Axis::pumpSensors(int64_t nowMs)
         }
         if (sensors_.consumeCrashActivation()) {
                 motionInFlight_ = false;
+                sensors_.notifyMotionEnd();
                 state_ = AxisState::Faulted;
                 lastStopReason_ = StopReason::LimitSwitch;
                 emitEvent(AxisEventType::LimitActivated, StopReason::LimitSwitch);
@@ -675,15 +709,28 @@ void Axis::pumpSensors(int64_t nowMs)
                 emitEvent(AxisEventType::StateChanged);
         }
         if (sensors_.consumeStallActivation()) {
-                // Stall is its own reason / fault code. Distinguishes a
-                // TMC2209 DIAG-pin event from a generic limit switch.
                 motionInFlight_ = false;
-                state_ = AxisState::Faulted;
-                lastStopReason_ = StopReason::StallDetected;
-                emitEvent(AxisEventType::LimitActivated, StopReason::StallDetected);
-                emitEvent(AxisEventType::FaultRaised, StopReason::StallDetected,
-                          FaultCode::Stall);
-                emitEvent(AxisEventType::StateChanged);
+                sensors_.notifyMotionEnd();
+                if (homing_.isActive()) {
+                        // During homing, a stall is the *expected* signal
+                        // for `StallHomingStrategy` — it means the
+                        // approach reached the mechanical stop. Don't
+                        // fault; let the strategy observe the stall via
+                        // `isStallActive()` and advance its FSM. State
+                        // stays Homing.
+                        stallObservedDuringHoming_ = true;
+                        lastStopReason_ = StopReason::StallDetected;
+                        emitEvent(AxisEventType::MotionStopped, StopReason::StallDetected);
+                } else {
+                        // Outside homing: stall is its own reason / fault
+                        // code, distinguished from a generic limit switch.
+                        state_ = AxisState::Faulted;
+                        lastStopReason_ = StopReason::StallDetected;
+                        emitEvent(AxisEventType::LimitActivated, StopReason::StallDetected);
+                        emitEvent(AxisEventType::FaultRaised, StopReason::StallDetected,
+                                  FaultCode::Stall);
+                        emitEvent(AxisEventType::StateChanged);
+                }
         }
 
         // Travel-limit handling: if a limit in the current move's
@@ -694,6 +741,7 @@ void Axis::pumpSensors(int64_t nowMs)
         if (motionInFlight_ && sensors_.isActive(SensorRole::TravelLimit, lastMoveDirection_)) {
                 (void)actuator_->stop(StopMode::Immediate);
                 motionInFlight_ = false;
+                sensors_.notifyMotionEnd();
                 state_ = AxisState::Idle;
                 lastStopReason_ = StopReason::TravelLimit;
                 emitEvent(AxisEventType::LimitActivated, StopReason::TravelLimit);
@@ -707,6 +755,7 @@ void Axis::pumpSensors(int64_t nowMs)
         if (homing_.isActive() && motionInFlight_ && sensors_.isActive(SensorRole::Home)) {
                 (void)actuator_->stop(StopMode::Immediate);
                 motionInFlight_ = false;
+                sensors_.notifyMotionEnd();
                 // Don't update state_ — the axis is still Homing.
                 emitEvent(AxisEventType::MotionStopped, StopReason::LimitSwitch);
         }
@@ -724,6 +773,10 @@ void Axis::pumpMotionState()
                 return; // still in flight
 
         motionInFlight_ = false;
+        // Disarm the stall window: the trailing-edge transient of a
+        // just-finished move can pulse DIAG once more, and we don't
+        // want that ISR hit to roll the engine into Faulted.
+        sensors_.notifyMotionEnd();
 
         // Map the engine's finished reason onto Axis-level events.
         if (st.faulted) {
@@ -751,10 +804,29 @@ void Axis::pumpMotionState()
                         emitEvent(AxisEventType::MotionStopped, st.finishedReason);
                 }
                 emitEvent(AxisEventType::StateChanged);
+
+                // Apply the built-in idle policy. Runs ALONGSIDE any
+                // listeners the host registered — the policy is just a
+                // baked-in shortcut for the common case.
+                if (idlePolicy_ == IdlePolicy::AutoDisable && actuator_) {
+                        (void)actuator_->disable();
+                        state_ = AxisState::Disabled;
+                        emitEvent(AxisEventType::StateChanged);
+                }
         }
         // During Homing, sub-motion completions are bookkept (above) but
         // no events fire here — the controller emits HomingCompleted /
         // HomingFailed once the whole cycle settles.
+}
+
+void Axis::setDefaultIdlePolicy(IdlePolicy policy)
+{
+        idlePolicy_ = policy;
+}
+
+IdlePolicy Axis::defaultIdlePolicy() const
+{
+        return idlePolicy_;
 }
 
 // =====================================================================
@@ -800,6 +872,7 @@ Status Axis::commandMove(Distance deltaSteps, Velocity feedSps)
                 // the Homing state. Direct callers reach for `moveBy()`.
                 return Status::Err(ErrorCode::InvalidState);
         }
+        stallObservedDuringHoming_ = false; // fresh phase, fresh detection
         const auto L = limitsForFeed(feedSps);
         const auto move = planner_.planBy(deltaSteps, L, timerResolutionHz_, timerMinTicks_);
         if (move.totalSteps == 0)
@@ -826,6 +899,7 @@ Status Axis::commandJog(Direction direction, Velocity feedSps)
         if (state_ != AxisState::Homing && state_ != AxisState::Idle) {
                 return Status::Err(ErrorCode::InvalidState);
         }
+        stallObservedDuringHoming_ = false; // fresh phase, fresh detection
         constexpr uint32_t kJogSafetySteps = 1'000'000;
         const auto L = limitsForFeed(feedSps);
         const auto move =
@@ -863,6 +937,17 @@ Status Axis::stopMove()
 bool Axis::isHomeActive() const
 {
         return sensors_.isActive(SensorRole::Home);
+}
+
+bool Axis::isStallActive() const
+{
+        // Used by StallHomingStrategy. We deliberately do NOT consume
+        // the latch here — the strategy may need to read it multiple
+        // times across consecutive `step()` calls. The latch resets
+        // when `commandJog` / `commandMove` is issued for the next
+        // phase (notifyMotionStart wipes the counter; we also reset
+        // the boolean via the IHomingAxis path).
+        return stallObservedDuringHoming_;
 }
 
 bool Axis::isMotionIdle() const

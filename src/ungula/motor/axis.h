@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "ungula/hal/timer/i_hwtimer.h"
 #include "ungula/motor/result.h"
 #include "ungula/motor/axis_types.h"
 #include "ungula/motor/axis_state.h"
@@ -17,11 +18,6 @@
 #include "ungula/motor/homing/i_homing_axis.h"
 #include "ungula/motor/events/axis_event.h"
 #include "ungula/motor/events/axis_event_queue.h"
-
-namespace ungula::hal::timer
-{
-class IHwTimer;
-}
 
 namespace ungula::motor
 {
@@ -123,6 +119,25 @@ class Axis : public IHomingAxis {
         Status enable();
         Status disable();
 
+        /// Live-level safety check across the configured ISR-role
+        /// safety sensors (E-stop, crash limit). Returns true if any
+        /// is currently asserted according to its polarity, bypassing
+        /// the edge-driven ISR latch.
+        ///
+        /// Use this after `clearFault()` to decide whether re-enabling
+        /// the axis is safe — the latch only fires on transitions, so
+        /// a button held continuously across a `clearFault()` /
+        /// `enable()` cycle is invisible to `lastStopReason()` /
+        /// `consumeEstopActivation()` but visible here.
+        ///
+        /// Not wired into `enable()` automatically — the right gating
+        /// policy depends on the host's wiring. A genuine fail-safe
+        /// wire (line floats HIGH at rest, sinks to GND on press /
+        /// cut) reads as "not asserted" here; an inverted wiring may
+        /// read asserted at idle. Hosts call this where the wiring
+        /// supports it.
+        bool isSafetyInterlockActive() const;
+
         // --- Motion ------------------------------------------------------
 
         Status moveTo(Position target, DistanceUnit unit = DistanceUnit::Steps);
@@ -165,6 +180,20 @@ class Axis : public IHomingAxis {
         Status setHomingStrategy(IHomingStrategy *strategy, uint32_t timeoutMs = 0);
         Status home();
         bool isHoming() const;
+
+        /// Idle-policy: what the axis does automatically when motion
+        /// completes. `HoldCurrent` (default) leaves the chip to its
+        /// own IHOLD-after-iHoldDelay path; `AutoDisable` calls
+        /// `disable()` internally on every MotionCompleted /
+        /// MotionStopped event. See `IdlePolicy` doc for trade-offs.
+        ///
+        /// This coexists with custom listeners — if you `subscribe()`
+        /// your own `IAxisEventListener` it runs alongside the
+        /// built-in policy. Use the policy for the common case, drop
+        /// down to a listener if you want to do more (light the
+        /// pillar, log the cycle, etc.).
+        void setDefaultIdlePolicy(IdlePolicy policy);
+        IdlePolicy defaultIdlePolicy() const;
         bool isHomed() const;
         HomingPhase homingPhase() const
         {
@@ -205,6 +234,7 @@ class Axis : public IHomingAxis {
         Status commandJog(Direction direction, Velocity feedSps) override;
         Status stopMove() override;
         bool isHomeActive() const override;
+        bool isStallActive() const override;
         bool isMotionIdle() const override;
         Status resetPosition(Position positionSteps) override;
 
@@ -265,6 +295,14 @@ class Axis : public IHomingAxis {
         bool motionInFlight_ = false;
         uint32_t eventSequence_ = 0;
         int64_t lastServiceMs_ = 0;
+        IdlePolicy idlePolicy_ = IdlePolicy::HoldCurrent;
+
+        /// Set by `pumpSensors` when stall fires during a homing
+        /// cycle. The HomingController/strategy reads this via
+        /// `isStallActive()` to know the jog ended because of a
+        /// stall. Cleared when the strategy issues the next motion
+        /// (commandJog / commandMove).
+        bool stallObservedDuringHoming_ = false;
 
         /// Sensor configurations captured at factory time and applied to
         /// `sensors_` in `begin()`. Storing them lets the caller hand us a

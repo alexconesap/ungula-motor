@@ -114,8 +114,8 @@ bool configureDriver()
                 return false;
         }
         tmc2209::Tmc2209Configurator::Config c;
-        c.runCurrent = 16; // ~0.7 A on a 0.11Ω sense resistor
-        c.holdCurrent = 8;
+        c.runCurrentMa = 700;
+        c.holdCurrentMa = 300;
         c.microsteps = tmc2209::Microsteps::Sixteenth;
         c.mode = tmc2209::ChopperMode::StealthChop;
 

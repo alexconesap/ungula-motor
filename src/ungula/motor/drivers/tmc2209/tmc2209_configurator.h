@@ -62,18 +62,37 @@ enum class Microsteps : uint8_t {
 class Tmc2209Configurator {
     public:
         struct Config {
-                /// Run current, 0..31 → 1/32 ... 32/32 of full Vref scale. The
-                /// physical current depends on Vref and the sense resistor; the
-                /// host is responsible for the math.
-                uint8_t runCurrent = 16;
-                /// Hold current, 0..31. Common practice is half of `runCurrent`
-                /// so the motor stays warm but quiet at standstill.
-                uint8_t holdCurrent = 8;
+                /// Run-coil current in mA RMS. The configurator converts this
+                /// to the chip's 5-bit `IRUN` field using `senseResistorOhms`
+                /// and the vsense scaling (see `useHighSensitivity` below).
+                /// Out-of-range or zero is rejected with `InvalidConfig`.
+                uint16_t runCurrentMa = 800;
+                /// Hold-coil current in mA RMS. Drops kicks in
+                /// `iHoldDelay * ~21 ms` after motion ends. Common practice:
+                /// 30..50% of `runCurrentMa`.
+                uint16_t holdCurrentMa = 400;
                 /// Delay (in IHOLDDELAY units of 2^18 clocks ≈ 21 ms each)
                 /// before the chip ramps from run → hold after motion stops.
                 /// 0..15. Default 1 gives ~21 ms; higher values reduce idle
                 /// noise at the cost of warmer coils after a quick stop.
                 uint8_t iHoldDelay = 1;
+
+                /// Sense resistor on the carrier board, in ohms. Typical
+                /// values: 0.11 Ω (BTT TMC2209 boards), 0.075 Ω (Watterott
+                /// SilentStepStick), 0.05 Ω (some industrial designs).
+                /// **Wrong value here means wrong actual current.** Check
+                /// the silk screen on your board.
+                float senseResistorOhms = 0.11f;
+
+                /// Vsense bit. The TMC2209 has two current-scaling ranges:
+                ///   false → Vfs = 0.325 V (low-sensitivity, the default).
+                ///           Best for currents above ~300 mA RMS.
+                ///   true  → Vfs = 0.180 V (high-sensitivity).
+                ///           Use for low-current setups (≤ ~300 mA RMS) so
+                ///           you don't get stuck at IRUN=1 with poor
+                ///           resolution. Wires through CHOPCONF[17].
+                bool useHighSensitivity = false;
+
                 Microsteps microsteps = Microsteps::Sixteenth;
                 ChopperMode mode = ChopperMode::StealthChop;
                 /// TOFF in CHOPCONF[3:0]. 0 disables the driver; 3..5 is the
@@ -106,10 +125,29 @@ class Tmc2209Configurator {
         /// `Tmc2209Diagnostics`.
         Status begin(const Config &cfg);
 
-        /// Change run/hold current at runtime. Safe to call during motion
-        /// (one UART write, ~700 µs at 115200 baud). Out-of-range values
-        /// return `InvalidConfig`.
-        Status setCurrents(uint8_t runCurrent, uint8_t holdCurrent, uint8_t iHoldDelay = 1);
+        /// Change run/hold current at runtime, in mA RMS. Uses the
+        /// `senseResistorOhms` + `useHighSensitivity` values from the
+        /// last `begin()`. Safe to call during motion (one UART write,
+        /// ~700 µs at 115200 baud). Out-of-range values return
+        /// `InvalidConfig`.
+        Status setCurrents(uint16_t runCurrentMa, uint16_t holdCurrentMa,
+                           uint8_t iHoldDelay = 1);
+
+        /// Static helper for users who want to do the math in their
+        /// own code (e.g. for a UI showing both mA and CS register
+        /// values). Computes the 5-bit CS field for the given target
+        /// RMS current. Returns a clamped value in 0..31 — caller can
+        /// check for clipping by re-reading via `csToMilliamps()`.
+        static uint8_t milliampsToCs(uint16_t rmsMilliamps,
+                                     float    senseResistorOhms,
+                                     bool     useHighSensitivity = false);
+
+        /// Inverse of `milliampsToCs()`. Useful for diagnostics: read
+        /// `shadowIholdIrun()` then split + report the actual currents
+        /// the chip is producing.
+        static uint16_t csToMilliamps(uint8_t cs,
+                                      float   senseResistorOhms,
+                                      bool    useHighSensitivity = false);
 
         /// Change microstep resolution. Updates the cached CHOPCONF and
         /// writes it back so other CHOPCONF fields are preserved.
@@ -153,6 +191,11 @@ class Tmc2209Configurator {
         uint32_t shadowGconf_ = 0;
         uint32_t shadowChopconf_ = 0;
         uint32_t shadowIholdIrun_ = 0;
+        // Cached from begin() so runtime `setCurrents(mA, mA)` can
+        // repeat the mA→CS conversion without re-passing the sense
+        // resistor / vsense flag.
+        float senseResistorOhms_ = 0.0f;
+        bool useHighSensitivity_ = false;
         bool begun_ = false;
 };
 
