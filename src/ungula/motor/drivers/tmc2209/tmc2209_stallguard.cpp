@@ -21,6 +21,27 @@ Tmc2209StallGuard::Tmc2209StallGuard(ITmcUart &uart)
 
 Status Tmc2209StallGuard::begin(const Config &cfg)
 {
+        // StallGuard4 on the TMC2209 is the StealthChop-native variant.
+        // SpreadCycle's older SG2 is not available on this chip — the
+        // DIAG output stays silent if the chopper is in SpreadCycle.
+        // Read GCONF and fail loudly if EN_SPREADCYCLE is set; that's
+        // the only failure mode that produces "stall config succeeds but
+        // no stall ever fires", which is much harder to diagnose later.
+        // ~1.5 ms one-shot UART round-trip at 115200 baud — at boot only.
+        if (cfg.verifyChopperMode) {
+                auto gconfRead = uart_.readRegister(reg::GCONF);
+                if (!gconfRead.ok())
+                        return Status::Err(gconfRead.error());
+                if ((gconfRead.takeValue() & gconf::EN_SPREADCYCLE) != 0u) {
+                        // The chopper is in SpreadCycle. StallGuard cannot
+                        // function here. Caller must either switch to
+                        // StealthChop first (via Tmc2209Configurator) or
+                        // pass `verifyChopperMode = false` to acknowledge
+                        // that they know the chip will not report stalls.
+                        return Status::Err(ErrorCode::InvalidConfig);
+                }
+        }
+
         auto s = setSgThreshold(cfg.sgThreshold);
         if (!s.ok())
                 return s;

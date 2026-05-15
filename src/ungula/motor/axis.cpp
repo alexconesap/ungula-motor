@@ -417,32 +417,54 @@ Status Axis::jog(Direction direction, Speed s)
 }
 
 // --- Trajectory tuning (runtime) ---------------------------------
+//
+// Semantics during in-flight motion:
+//   - `setAcceleration` / `setDeceleration` / `setRampProfile` take
+//     effect on the NEXT motion. The current move's segments are
+//     already precomputed; changing the ramp coefficients now would
+//     require mid-flight re-planning (engine doesn't support it).
+//
+//   - `setMaxVelocity` is special-cased for jog motion: if the axis
+//     is currently jogging, the live speed change is applied by
+//     stopping the engine and re-arming the jog at the new velocity.
+//     Brief glitch (one service tick — a handful of ms) but no fault.
+//     For `Moving` state (moveBy / moveTo), the change applies on the
+//     next motion — the in-flight target's profile is locked.
 
 Status Axis::setMaxVelocity(Speed s)
 {
-        if (motionInFlight_)
-                return Status::Err(ErrorCode::MotionInProgress);
-        return applyMaxVelocity(common_.limits, s, common_.units);
+        const auto applyStatus = applyMaxVelocity(common_.limits, s, common_.units);
+        if (!applyStatus.ok())
+                return applyStatus;
+
+        // Live jog restart so the speed change is visible immediately.
+        // moveTo / moveBy in flight: limits are updated but the running
+        // move keeps its precomputed profile.
+        if (motionInFlight_ && state_ == AxisState::Jogging) {
+                const Direction d = lastMoveDirection_;
+                (void)actuator_->stop(StopMode::Immediate);
+                motionInFlight_ = false;
+
+                constexpr uint32_t kJogSafetySteps = 1'000'000;
+                const auto move = planner_.planJog(d, kJogSafetySteps, common_.limits,
+                                                   timerResolutionHz_, timerMinTicks_);
+                return armAndStart(move, AxisState::Jogging);
+        }
+        return Status::Ok();
 }
 
 Status Axis::setAcceleration(Acceleration a)
 {
-        if (motionInFlight_)
-                return Status::Err(ErrorCode::MotionInProgress);
         return applyAcceleration(common_.limits, a, common_.units);
 }
 
 Status Axis::setDeceleration(Acceleration a)
 {
-        if (motionInFlight_)
-                return Status::Err(ErrorCode::MotionInProgress);
         return applyDeceleration(common_.limits, a, common_.units);
 }
 
 Status Axis::setRampProfile(Acceleration a)
 {
-        if (motionInFlight_)
-                return Status::Err(ErrorCode::MotionInProgress);
         return applyRampProfile(common_.limits, a, common_.units);
 }
 

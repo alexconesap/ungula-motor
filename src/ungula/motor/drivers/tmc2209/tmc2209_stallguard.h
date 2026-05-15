@@ -59,6 +59,17 @@ class Tmc2209StallGuard {
                 /// flag exists for future expansion (e.g. silencing DIAG when
                 /// stall detection is disabled at runtime).
                 bool enableDiagOutput = true;
+
+                /// When true (default), `begin()` reads GCONF and refuses
+                /// to configure StallGuard if the chip is in SpreadCycle
+                /// mode — SG4 is StealthChop-only on the TMC2209, and a
+                /// silent "stall never fires" misconfiguration is much
+                /// harder to diagnose later than an explicit error at
+                /// boot. Set to false only if you have a deliberate
+                /// reason to write SGTHRS / TCOOLTHRS while in
+                /// SpreadCycle (e.g. preparing the registers before
+                /// switching chopper mode).
+                bool verifyChopperMode = true;
         };
 
         explicit Tmc2209StallGuard(ITmcUart &uart);

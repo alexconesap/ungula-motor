@@ -18,6 +18,36 @@ namespace
 using namespace ungula::motor::tmc2209;
 using namespace ungula::motor;
 
+TEST(Tmc2209StallGuardTest, BeginRefusesIfChopperIsSpreadCycle)
+{
+        // Pre-seed GCONF as if Tmc2209Configurator had been told to use
+        // SpreadCycle. begin() must refuse because SG4 only works under
+        // StealthChop. The user can flip verifyChopperMode=false if they
+        // know what they're doing.
+        FakeTmcUart uart;
+        uart.seed(reg::GCONF, gconf::PDN_DISABLE | gconf::MSTEP_REG_SELECT |
+                                  gconf::EN_SPREADCYCLE);
+
+        Tmc2209StallGuard sg(uart);
+        Tmc2209StallGuard::Config cfg;
+        EXPECT_EQ(sg.begin(cfg).error(), ErrorCode::InvalidConfig);
+
+        // Override: should accept the same config when the check is off.
+        cfg.verifyChopperMode = false;
+        EXPECT_TRUE(sg.begin(cfg).ok());
+}
+
+TEST(Tmc2209StallGuardTest, BeginPassesWhenChopperIsStealthChop)
+{
+        // GCONF without EN_SPREADCYCLE — the StealthChop case.
+        FakeTmcUart uart;
+        uart.seed(reg::GCONF, gconf::PDN_DISABLE | gconf::MSTEP_REG_SELECT);
+
+        Tmc2209StallGuard sg(uart);
+        Tmc2209StallGuard::Config cfg;
+        EXPECT_TRUE(sg.begin(cfg).ok());
+}
+
 TEST(Tmc2209StallGuardTest, BeginWritesSgthrsAndTCoolThrs)
 {
         FakeTmcUart uart;

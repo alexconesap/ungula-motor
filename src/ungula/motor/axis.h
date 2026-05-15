@@ -140,11 +140,19 @@ class Axis : public IHomingAxis {
 
         // --- Trajectory tuning (runtime) ---------------------------------
         //
-        // Mutate the live `TrajectoryLimits` in user units. The next
-        // `moveTo` / `moveBy` / `jog` picks up the new value. Calls are
-        // rejected with `MotionInProgress` if motion is currently in
-        // flight — the planner snapshots the limits at arm time and
-        // changing them mid-flight has no effect on the running move.
+        // Mutate the live `TrajectoryLimits` in user units. None of these
+        // refuse during in-flight motion; the semantics are:
+        //
+        //   - `setMaxVelocity` while JOGGING: stops the engine and re-arms
+        //     the jog at the new speed (brief glitch, no fault). Use this
+        //     to change feed live during an indefinite jog.
+        //   - `setMaxVelocity` while MOVING (moveTo/moveBy in flight): the
+        //     in-flight profile is locked (segments already precomputed);
+        //     the new value applies on the next motion.
+        //   - `setAcceleration` / `setDeceleration` / `setRampProfile`:
+        //     always next-motion only — changing ramp coefficients
+        //     mid-flight would require re-planning the segment queue, and
+        //     the engine doesn't support that today.
 
         Status setMaxVelocity(Speed s);
         Status setAcceleration(Acceleration a);
