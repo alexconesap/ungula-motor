@@ -168,6 +168,16 @@ add_executable(test_tmc2209_hal_uart_crc
 )
 target_link_libraries(test_tmc2209_hal_uart_crc gtest_main)
 
+# ---------------------------------------------------------------------------
+# YPMC / RATTMOTOR S2SVD15 servo driver. STEP/DIR only — no transport
+# layer to link. Pulls in the driver .cpp directly.
+# ---------------------------------------------------------------------------
+add_executable(test_ypmc_servo
+    test_ypmc_servo.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/drivers/ypmc/ypmc_servo.cpp
+)
+target_link_libraries(test_ypmc_servo gtest_main)
+
 enable_testing()
 include(GoogleTest)
 gtest_discover_tests(test_motion_planner)
@@ -185,3 +195,4 @@ gtest_discover_tests(test_tmc2209_diagnostics)
 gtest_discover_tests(test_tmc2209_stallguard)
 gtest_discover_tests(test_tmc2209_coolstep)
 gtest_discover_tests(test_tmc2209_hal_uart_crc)
+gtest_discover_tests(test_ypmc_servo)

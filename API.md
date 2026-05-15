@@ -1115,6 +1115,163 @@ The fake honours GSTAT W1C and IFCNT auto-increment so configurator regressions 
 
 ---
 
+## RATTMOTOR YPMC servo (S2SVD15 drive)
+
+```cpp
+#include <ungula/motor/drivers/ypmc/ypmc_servo.h>
+```
+
+The S2SVD15 is a STEP/DIR industrial servo controller. UngulaMotor
+reuses `Axis::createStepDirServo` for the pulse train; this driver
+namespace contributes documented timing / polarity defaults and a
+brake controller for the YPMC motor's optional 24 V holding brake.
+
+No new actuator, no new pulse engine. The pulse engine never reads
+from the drive — there is no UART traffic on the motion path. ALM−
+takes the standard `SensorRole::CrashLimit` ISR path; the brake
+controller is task-context only and never touches the ISR.
+
+### Timing / polarity types
+
+```cpp
+namespace ungula::motor::ypmc;
+
+struct DriveTiming {
+    uint32_t dirSetupUs       = 10;       // 5 µs spec; 10 µs default
+    uint32_t minPulseHighUs   = 3;        // 1 µs spec; 3 µs default
+    uint32_t minPulseLowUs    = 3;
+    uint32_t maxStepRateSps   = 500'000;  // S2SVD15 CMD+DIR ceiling
+};
+
+struct DrivePolarity {
+    bool srvOnActiveHigh       = true;
+    bool alarmActiveLow        = true;
+    bool inPositionActiveHigh  = true;
+};
+
+inline constexpr DriveTiming    kDefaultDriveTiming   = {};
+inline constexpr DrivePolarity  kDefaultDrivePolarity = {};
+```
+
+### `applyDriveDefaults`
+
+```cpp
+Status applyDriveDefaults(StepDirServoAxisConfig& cfg,
+                          const DriveTiming&  timing   = kDefaultDriveTiming,
+                          const DrivePolarity& polarity = kDefaultDrivePolarity);
+```
+
+Populates `cfg.dirSetupUs`, `cfg.dirActiveHigh`, `cfg.enableActiveLow`,
+and the timing fields in `cfg.common.limits`. Clamps an already-set
+`maxStepRateSps` down to the drive's ceiling but leaves slower
+values alone. When `cfg.alarmInputPin` is set, appends a
+`SensorRole::CrashLimit` slot for it.
+
+Returns `InvalidConfig` if `cfg.sensorCount == MAX_SENSOR_INPUTS` and
+an alarm pin is configured (no room to append the alarm slot).
+
+### Use case: bring-up
+
+```cpp
+namespace ypmc = ungula::motor::ypmc;
+
+StepDirServoAxisConfig cfg;
+cfg.common.axisId = AxisId(0);
+cfg.common.units.stepsPerMm = 1000.0f;
+cfg.common.limits.maxVelocitySps = 200'000;
+cfg.common.limits.accelSpsPerSec = 800'000;
+cfg.common.limits.decelSpsPerSec = 800'000;
+cfg.stepPin            = StepPin{ 18 };
+cfg.dirPin             = DirectionPin{ 19 };
+cfg.enablePin          = EnablePin{ 21 };
+cfg.alarmInputPin      = InputPin{ 34 };
+cfg.inPositionInputPin = InputPin{ 35 };
+
+const auto def = ypmc::applyDriveDefaults(cfg);
+if (!def.ok()) { /* sensor table is full */ }
+
+auto axis = Axis::createStepDirServo(cfg).takeValue();
+```
+
+### `BrakeController`
+
+Listener that sequences a host-driven 24 V holding-brake relay with
+the axis lifecycle. The motor's brake is mechanically engaged when
+the coil is de-energised — the host energises the coil to release
+the brake before motion.
+
+```cpp
+struct BrakeController::Config {
+    uint8_t  brakeReleasePin       = 0xFF;   // required
+    bool     brakeReleaseActiveHigh = true;
+    uint32_t releaseSettleMs        = 120;   // brake mechanical release time
+    uint32_t engageSettleMs         = 30;
+    bool     autoEngageOnMotionEnd  = true;
+};
+
+Status begin();        // configures GPIO, seeds brake engaged
+Status release();      // energises coil + blocks releaseSettleMs
+Status engage();       // blocks engageSettleMs + de-energises coil
+bool   isReleased() const;
+void   setAutoEngage(bool);
+
+void   onAxisEvent(const AxisEvent&) override;
+```
+
+The listener auto-engages on `MotionCompleted` / `MotionStopped` /
+`EmergencyStopped` / `FaultRaised`. It does **not** auto-release on
+`MotionStarted` — by the time that event fires the engine has already
+armed and may have started pulsing into an engaged brake. Hosts call
+`release()` explicitly between `enable()` and the first motion
+command.
+
+### Use case: full lifecycle
+
+```cpp
+ypmc::BrakeController brake({
+    /*.brakeReleasePin       =*/ 25,
+    /*.brakeReleaseActiveHigh=*/ true,
+    /*.releaseSettleMs       =*/ 120,
+    /*.engageSettleMs        =*/ 30,
+    /*.autoEngageOnMotionEnd =*/ true,
+});
+
+brake.begin();
+axis->subscribe(&brake);
+
+axis->begin();
+axis->enable();
+brake.release();           // blocks ~120 ms for mechanical release
+axis->moveBy(10000);       // brake auto-engages when motion completes
+
+// Next move:
+brake.release();           // explicit release between moves
+axis->moveBy(-10000);
+```
+
+Disable auto-engage when the host wants the motor to stay free
+between moves (horizontal axes, vacuum-grip pickers, etc.):
+
+```cpp
+brake.setAutoEngage(false);
+```
+
+Fault paths (`FaultRaised`, `EmergencyStopped`) always engage,
+regardless of the flag — the motor is no longer under controlled
+deceleration and the brake catches it.
+
+### What's NOT here
+
+- **Modbus side-channel.** RS-232 / RS-485 (CN port) is optional and
+  the kit ships without the cable. When a diagnostics layer is added
+  it lands under the same namespace as `ypmc_modbus_uart.h/.cpp` and
+  `ypmc_diagnostics.h/.cpp`, mirroring the `tmc2209` split.
+- **Per-drive alarm decoding.** All drive alarms currently surface
+  as `FaultCode::LimitExceeded` (via the actuator's `LimitSwitch`
+  fault mapping). Finer breakdown needs the future Modbus layer.
+
+---
+
 ## Threading / ISR rules
 
 Hard rules — violations cause crashes or silent data corruption:

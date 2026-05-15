@@ -16,6 +16,7 @@ Pulse generation lives inside a hardware-timer ISR. Everything else — the main
 - [Architecture](#architecture)
 - [Quick start — open-loop stepper (TMC2209)](#quick-start--open-loop-stepper-tmc2209)
 - [Quick start — STEP/DIR servo](#quick-start--stepdir-servo)
+- [Quick start — RATTMOTOR YPMC servo + brake](#quick-start--rattmotor-ypmc-servo--brake)
 - [Quick start — limit-switch homing](#quick-start--limit-switch-homing)
 - [Speed and acceleration in user units](#speed-and-acceleration-in-user-units)
 - [Live trajectory tuning](#live-trajectory-tuning)
@@ -52,6 +53,7 @@ Pulse generation lives inside a hardware-timer ISR. Everything else — the main
 | --- | --- | --- | --- |
 | Open-loop stepper (TMC2209, A4988, DRV8825) | STEP + DIR + EN (active-LOW) | `StepDirActuator` | Optional UART configuration via `Tmc2209Configurator` |
 | STEP/DIR servo (Yaskawa, Delta, Leadshine) | STEP + DIR + SVON (typically active-HIGH) + optional ALM / INP | `StepDirActuator` (kind = `StepDirServo`) | Drive owns position truth; encoder feedback wiring deferred |
+| RATTMOTOR YPMC + S2SVD15 servo (with optional brake) | STEP + DIR + SRV-ON (active-HIGH) + ALM / COIN + 24 V brake coil | `StepDirActuator` (kind = `StepDirServo`) + `ungula::motor::ypmc::applyDriveDefaults` + `ypmc::BrakeController` | Helper fills S2SVD15 timing / polarity; brake controller sequences a host-driven 24 V holding brake against the axis lifecycle |
 | CAN servo (CiA-402, vendor-specific) | CAN bus | `CanServoActuator` + `ICanServoProtocol` | Concrete protocols not bundled — bring your own |
 
 ## Dependencies
@@ -250,6 +252,71 @@ void loop() {
 ```
 
 Full sketch in [`examples/step_dir_servo/`](examples/step_dir_servo/).
+
+## Quick start — RATTMOTOR YPMC servo + brake
+
+The YPMC + S2SVD15 kit is a STEP/DIR industrial servo with an
+optional 24 V holding brake on the motor. The wire shape is the same
+as the generic STEP/DIR servo above — `ungula::motor::ypmc` adds two
+focused helpers on top:
+
+- `applyDriveDefaults(StepDirServoAxisConfig&)` — pre-populates the
+  S2SVD15's timing (DIR setup, min pulse widths, 500 kpps max),
+  polarity (SRV-ON active-HIGH, ALM− active-LOW), and wires ALM as a
+  `CrashLimit` sensor when its pin is set.
+- `BrakeController` — sequences a host-driven brake relay against the
+  axis lifecycle. Auto-engages on `MotionCompleted` / `MotionStopped`
+  / faults; release is explicit (blocks for the brake's mechanical
+  release time before the first STEP can fire).
+
+```cpp
+#include <ungula/motor.h>
+#include <ungula/motor/drivers/ypmc/ypmc_servo.h>
+
+using namespace ungula::motor;
+namespace ypmc = ungula::motor::ypmc;
+
+StepDirServoAxisConfig cfg;
+cfg.common.axisId = AxisId(0);
+cfg.common.units.stepsPerMm = 1000.0f;            // 10000 pulses/rev, 10 mm lead
+cfg.common.limits.maxVelocitySps = 200'000;
+cfg.common.limits.accelSpsPerSec = 800'000;
+cfg.common.limits.decelSpsPerSec = 800'000;
+cfg.stepPin            = StepPin{ 18 };
+cfg.dirPin             = DirectionPin{ 19 };
+cfg.enablePin          = EnablePin{ 21 };          // SRV-ON
+cfg.alarmInputPin      = InputPin{ 34 };           // ALM−
+cfg.inPositionInputPin = InputPin{ 35 };           // COIN
+ypmc::applyDriveDefaults(cfg);                     // fills timing + polarity + alarm sensor
+
+auto axis = Axis::createStepDirServo(cfg).takeValue();
+
+ypmc::BrakeController brake({
+    /*.brakeReleasePin       =*/ 25,
+    /*.brakeReleaseActiveHigh=*/ true,
+    /*.releaseSettleMs       =*/ 120,
+    /*.engageSettleMs        =*/ 30,
+    /*.autoEngageOnMotionEnd =*/ true,
+});
+
+void setup() {
+    brake.begin();
+    axis->subscribe(&brake);     // auto-engages on motion-end / fault
+    axis->begin();
+    axis->enable();
+    delay(60);                   // SRV-ON debounce inside the drive
+    brake.release();             // blocks ~120 ms for mechanical release
+    axis->moveBy(10000);
+}
+```
+
+The brake controller does NOT auto-release on `MotionStarted` — by
+the time that event fires the engine has already armed. Hosts call
+`release()` explicitly between `enable()` and the first motion
+command. See [`examples/ypmc_servo_brake/`](examples/ypmc_servo_brake/)
+for the full sketch and
+[`src/ungula/motor/drivers/ypmc/README.md`](src/ungula/motor/drivers/ypmc/README.md)
+for S2SVD15 wiring and tuning notes.
 
 ## Quick start — limit-switch homing
 
