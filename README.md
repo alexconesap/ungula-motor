@@ -896,32 +896,31 @@ This pattern is safe for one-shot "go there and wait" flows in setup, calibratio
 Subscribe a listener; events arrive at `service()`-drain time, never from ISR.
 
 ```cpp
-#include <Arduino.h>
-
+// For Arduino's style use Arduino.h and replace the `log_info` call by a `Serial.printf()`
+#include <emblogx/logger.h>
 #include <ungula/motor.h>
 
 using namespace ungula::motor;
 
-class PrintingListener final : public IAxisEventListener {
-public:
-    void onAxisEvent(const AxisEvent& ev) override {
-        Serial.printf("[%lu] axis %u  %s  state=%s  pos=%ld  reason=%s  fault=%s\n",
-                      static_cast<unsigned long>(ev.timestampMs),
-                      ev.axisId.value,
-                      axisEventTypeToString(ev.type),
-                      axisStateToString(ev.state),
-                      static_cast<long>(ev.commandedPosition),
-                      stopReasonToString(ev.stopReason),
-                      faultToString(ev.faultCode));
-    }
+class SerialListener final : public IAxisEventListener {
+    public:
+        void onAxisEvent(const AxisEvent &ev) override
+        {
+                log_info("[axis %u] %s  state=%s  pos=%ld  reason=%s  fault=%s", ev.axisId.value,
+                         axisEventTypeToString(ev.type), axisStateToString(ev.state),
+                         static_cast<long>(ev.commandedPosition), stopReasonToString(ev.stopReason),
+                         faultToString(ev.faultCode));
+        }
 };
-PrintingListener listener;
+SerialListener listener;
 
-// inside setup():
-//   axis->subscribe(&listener);
+void setup() {
+        // ... axis initialization
+        axis->subscribe(&listener);
+}
 ```
 
-Event types emitted by the Axis:
+Event types [AxisEventType](./src/ungula/motor/events/axis_event.h) emitted by the Axis:
 
 | Event | Trigger |
 | --- | --- |
