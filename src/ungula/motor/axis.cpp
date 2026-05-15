@@ -71,6 +71,9 @@ Result<std::unique_ptr<Axis>> Axis::createStepDirStepper(const StepDirStepperAxi
         eCfg.dirPin = cfg.dirPin.value;
         eCfg.dirActiveHigh = cfg.dirActiveHigh;
         eCfg.dirSetupUs = cfg.dirSetupUs;
+        eCfg.secondaryDirPin = cfg.secondaryDirPin.value;
+        eCfg.secondaryDirActiveHigh = cfg.secondaryDirActiveHigh;
+        eCfg.secondaryDirInverted = cfg.secondaryDirInverted;
         eCfg.timerResolutionHz = 1'000'000;
         eCfg.timerMinTicks = 5;
         auto engine = std::make_unique<HalPulseEngine>(*timer, eCfg);
@@ -79,6 +82,8 @@ Result<std::unique_ptr<Axis>> Axis::createStepDirStepper(const StepDirStepperAxi
         aCfg.kind = StepDirActuatorKind::OpenLoopStepper;
         aCfg.enablePin = cfg.enablePin.value;
         aCfg.enableActiveLow = cfg.enableActiveLow;
+        aCfg.secondaryEnablePin = cfg.secondaryEnablePin.value;
+        aCfg.secondaryEnableActiveLow = cfg.secondaryEnableActiveLow;
         aCfg.hasAlarmInput = false;
         aCfg.hasInPositionInput = false;
         auto actuator = std::make_unique<StepDirActuator>(*engine, aCfg);
@@ -109,6 +114,9 @@ Result<std::unique_ptr<Axis>> Axis::createStepDirServo(const StepDirServoAxisCon
         eCfg.dirPin = cfg.dirPin.value;
         eCfg.dirActiveHigh = cfg.dirActiveHigh;
         eCfg.dirSetupUs = cfg.dirSetupUs;
+        eCfg.secondaryDirPin = cfg.secondaryDirPin.value;
+        eCfg.secondaryDirActiveHigh = cfg.secondaryDirActiveHigh;
+        eCfg.secondaryDirInverted = cfg.secondaryDirInverted;
         eCfg.timerResolutionHz = 1'000'000;
         eCfg.timerMinTicks = 5;
         auto engine = std::make_unique<HalPulseEngine>(*timer, eCfg);
@@ -117,6 +125,8 @@ Result<std::unique_ptr<Axis>> Axis::createStepDirServo(const StepDirServoAxisCon
         aCfg.kind = StepDirActuatorKind::StepDirServo;
         aCfg.enablePin = cfg.enablePin.value;
         aCfg.enableActiveLow = cfg.enableActiveLow;
+        aCfg.secondaryEnablePin = cfg.secondaryEnablePin.value;
+        aCfg.secondaryEnableActiveLow = cfg.secondaryEnableActiveLow;
         aCfg.hasAlarmInput = isPinSet(cfg.alarmInputPin.value);
         aCfg.hasInPositionInput = isPinSet(cfg.inPositionInputPin.value);
         auto actuator = std::make_unique<StepDirActuator>(*engine, aCfg);
@@ -469,13 +479,47 @@ Status Axis::setMaxVelocity(Speed s)
         // move keeps its precomputed profile.
         if (motionInFlight_ && state_ == AxisState::Jogging) {
                 const Direction d = lastMoveDirection_;
-                (void)actuator_->stop(StopMode::Immediate);
+
+                // Don't silently swallow the stop result — a failed stop
+                // leaves the axis in an undefined state and we'd rather
+                // surface the error than build a stale Jogging on top
+                // of running motion.
+                const auto stopStatus = actuator_->stop(StopMode::Immediate);
+                if (!stopStatus.ok())
+                        return stopStatus;
                 motionInFlight_ = false;
+                sensors_.notifyMotionEnd();
 
                 constexpr uint32_t kJogSafetySteps = 1'000'000;
                 const auto move = planner_.planJog(d, kJogSafetySteps, common_.limits,
                                                    timerResolutionHz_, timerMinTicks_);
-                return armAndStart(move, AxisState::Jogging);
+
+                // Empty plan (zero accel, pathological limits): we've
+                // already stopped the engine, but `armAndStart` would
+                // early-return Ok without touching `state_`, leaving a
+                // stale `Jogging` with no underlying motion. Repair to
+                // Idle explicitly and surface InvalidConfig so the host
+                // knows the retune didn't take.
+                if (move.totalSteps == 0 || move.segmentCount == 0) {
+                        state_ = AxisState::Idle;
+                        lastStopReason_ = StopReason::UserStop;
+                        emitEvent(AxisEventType::MotionStopped, StopReason::UserStop);
+                        emitEvent(AxisEventType::StateChanged);
+                        return Status::Err(ErrorCode::InvalidConfig);
+                }
+
+                // `armAndStart` can still fail at the actuator (arm /
+                // start error). Same state repair so the axis doesn't
+                // strand in Jogging-with-no-motion.
+                const auto armStatus = armAndStart(move, AxisState::Jogging);
+                if (!armStatus.ok()) {
+                        state_ = AxisState::Idle;
+                        lastStopReason_ = StopReason::UserStop;
+                        emitEvent(AxisEventType::MotionStopped, StopReason::UserStop);
+                        emitEvent(AxisEventType::StateChanged);
+                        return armStatus;
+                }
+                return armStatus;
         }
         return Status::Ok();
 }
@@ -691,7 +735,17 @@ void Axis::pumpSensors(int64_t nowMs)
         // Whichever path stops motion ALSO disarms the stall window —
         // otherwise a stray DIAG pulse seconds later would still call
         // `haltFromIsr` and re-fault an already-stopped axis.
-        if (sensors_.consumeEstopActivation()) {
+        //
+        // Precedence: E-stop dominates. If E-stop and crash (or stall)
+        // latched in the same tick we ALWAYS consume every latch (so
+        // none of them survives to a subsequent service tick), but
+        // only the highest-precedence one writes `state_` /
+        // `lastStopReason_`. E-stop > crash > stall.
+        const bool estopFired = sensors_.consumeEstopActivation();
+        const bool crashFired = sensors_.consumeCrashActivation();
+        const bool stallFired = sensors_.consumeStallActivation();
+
+        if (estopFired) {
                 motionInFlight_ = false;
                 sensors_.notifyMotionEnd();
                 state_ = AxisState::EmergencyStopped;
@@ -703,7 +757,7 @@ void Axis::pumpSensors(int64_t nowMs)
                           FaultCode::EmergencyStop);
                 emitEvent(AxisEventType::StateChanged);
         }
-        if (sensors_.consumeCrashActivation()) {
+        if (crashFired && !estopFired) {
                 motionInFlight_ = false;
                 sensors_.notifyMotionEnd();
                 state_ = AxisState::Faulted;
@@ -713,7 +767,7 @@ void Axis::pumpSensors(int64_t nowMs)
                           FaultCode::LimitExceeded);
                 emitEvent(AxisEventType::StateChanged);
         }
-        if (sensors_.consumeStallActivation()) {
+        if (stallFired && !estopFired && !crashFired) {
                 motionInFlight_ = false;
                 sensors_.notifyMotionEnd();
                 if (homing_.isActive()) {
@@ -936,6 +990,12 @@ Status Axis::stopMove()
         if (!s.ok())
                 return s;
         motionInFlight_ = false;
+        // Disarm the stall window — without this, a trailing DIAG
+        // pulse after the stop would still call `haltFromIsr` and
+        // re-fault an already-stopped axis. Matches the pattern in
+        // every other motion-stopping path (`stop`, `emergencyStop`,
+        // every halt branch in `pumpSensors`, `pumpMotionState`).
+        sensors_.notifyMotionEnd();
         return Status::Ok();
 }
 

@@ -18,11 +18,15 @@ namespace ungula::motor::tmc2209
 ///
 /// ## Two detection modes
 ///
-///   1. **DIAG-pin (default)**: the chip pulses DIAG high when
-///      SG_RESULT drops below SGTHRS during a motion above TCOOLTHRS.
-///      The host wires DIAG to a GPIO and the Axis facade
-///      registers a sensor with role `CrashLimit` against it. Sub-
-///      microsecond latency. No UART traffic during motion.
+///   1. **DIAG-pin (default)**: the chip drives DIAG high when
+///      SG_RESULT drops below 2*SGTHRS during a motion above TCOOLTHRS.
+///      The host wires DIAG to a GPIO and the Axis facade registers a
+///      sensor with role `SensorRole::Stall` against it (NOT
+///      `CrashLimit` — the bank has dedicated stall debouncing via
+///      `stallHitsToTrigger` / `stallArmDelayMs`, and stall events
+///      route to `FaultCode::Stall` / `StopReason::StallDetected`
+///      instead of the generic limit-switch path). Sub-microsecond
+///      latency. No UART traffic during motion.
 ///   2. **SG_RESULT polling (opt-in)**: the host periodically reads
 ///      SG_RESULT via UART and applies its own threshold logic. Only
 ///      used when the host needs the raw measurement (e.g. for stall

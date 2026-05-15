@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "ungula/core/time/time.h"
 #include "ungula/hal/gpio/gpio.h"
 
 #include "ungula/motor/axis_types.h"
@@ -365,6 +366,155 @@ TEST(SensorBankTest, IsrSensorStillUsesInterruptConfig)
         ASSERT_TRUE(bank.begin(&cfg, 1, &engine).ok());
 
         EXPECT_EQ(hg::detail::lastInputMode(43), hg::detail::HostInputMode::Interrupt);
+}
+
+// =====================================================================
+// Stall ISR halt-gating regression tests
+// =====================================================================
+// Audit P0-1: the ISR previously halted the engine on the FIRST DIAG
+// edge past the arm window, while `stallHitsToTrigger` only gated
+// latch promotion at the service tick. With `stallHitsToTrigger > 1`
+// the engine would fault before a stall was latched, sending the
+// axis through the generic PulseEngineFault path instead of the
+// stall path. Fix: ISR halts only when `count >= stallHitsToTrigger`,
+// and stops halting once a stall is already latched.
+
+namespace
+{
+
+SensorInputConfig makeStallCfg(uint8_t pin, uint8_t hitsToTrigger, uint16_t armDelayMs)
+{
+        SensorInputConfig cfg;
+        cfg.pin = pin;
+        cfg.role = SensorRole::Stall;
+        cfg.polarity = SensorPolarity::NormallyOpen;
+        cfg.stallHitsToTrigger = hitsToTrigger;
+        cfg.stallArmDelayMs = armDelayMs;
+        return cfg;
+}
+
+} // anonymous
+
+// Tests use `armedAt = millis() - 1000` to put the arm point ~1 s in
+// the past so the ISR's `now - armedAt >= stallArmDelayMs` check
+// reliably resolves to "past window" regardless of how soon after
+// process boot the test runs.
+namespace
+{
+
+int64_t armedInThePast()
+{
+        return ungula::core::time::millis() - 1000;
+}
+
+} // anonymous
+
+TEST(SensorBankTest, StallHaltGatedByHitsToTrigger)
+{
+        auto cfg = makeStallCfg(50, /*hitsToTrigger=*/4, /*armDelayMs=*/0);
+
+        FakePulseEngine engine;
+        SensorBank bank;
+        ASSERT_TRUE(bank.begin(&cfg, 1, &engine).ok());
+        bank.notifyMotionStart(armedInThePast());
+
+        // Three hits below the threshold — engine must stay running.
+        for (int i = 0; i < 3; ++i) {
+                bank.simulateIsrEdgeForTesting(SensorRole::Stall);
+        }
+        EXPECT_EQ(engine.haltFromIsrCallCount, 0u);
+        EXPECT_EQ(bank.totalStallHits(), 3u);
+        EXPECT_FALSE(bank.consumeStallActivation());
+
+        // Fourth hit reaches the threshold — engine MUST be halted
+        // and the bank MUST latch a consumable stall.
+        bank.simulateIsrEdgeForTesting(SensorRole::Stall);
+        EXPECT_EQ(engine.haltFromIsrCallCount, 1u);
+        EXPECT_EQ(bank.totalStallHits(), 4u);
+        EXPECT_TRUE(bank.consumeStallActivation());
+}
+
+TEST(SensorBankTest, StallNoReHaltAfterLatch)
+{
+        // Once a stall is latched, subsequent ISR edges must NOT
+        // re-halt the (already-halted) engine. They still count in
+        // the cumulative diagnostic counter.
+        auto cfg = makeStallCfg(51, /*hitsToTrigger=*/2, /*armDelayMs=*/0);
+
+        FakePulseEngine engine;
+        SensorBank bank;
+        ASSERT_TRUE(bank.begin(&cfg, 1, &engine).ok());
+        bank.notifyMotionStart(armedInThePast());
+
+        // Cross the threshold.
+        bank.simulateIsrEdgeForTesting(SensorRole::Stall);
+        bank.simulateIsrEdgeForTesting(SensorRole::Stall);
+        ASSERT_EQ(engine.haltFromIsrCallCount, 1u);
+        EXPECT_EQ(bank.totalStallHits(), 2u);
+
+        // Two more hits while the latch is still set. The latch
+        // wasn't consumed, so re-halting would be redundant and
+        // noisy. Engine halt count must stay at 1.
+        bank.simulateIsrEdgeForTesting(SensorRole::Stall);
+        bank.simulateIsrEdgeForTesting(SensorRole::Stall);
+        EXPECT_EQ(engine.haltFromIsrCallCount, 1u);
+        EXPECT_EQ(bank.totalStallHits(), 4u);
+
+        // The latch is still consumable exactly once.
+        EXPECT_TRUE(bank.consumeStallActivation());
+        EXPECT_FALSE(bank.consumeStallActivation());
+}
+
+TEST(SensorBankTest, StallInsideArmWindowDoesNotHalt)
+{
+        // Hits arriving DURING the arm window are counted but never
+        // halt the engine, regardless of count. The window protects
+        // against StealthChop auto-tune transients at motion start.
+        //
+        // We arm with `armedAt = millis()` (i.e., right now) and set
+        // `stallArmDelayMs = 100000` — a 100-second window so the
+        // test's millisecond-scale duration is comfortably inside.
+        auto cfg = makeStallCfg(52, /*hitsToTrigger=*/1,
+                                /*armDelayMs=*/100'000);
+
+        FakePulseEngine engine;
+        SensorBank bank;
+        ASSERT_TRUE(bank.begin(&cfg, 1, &engine).ok());
+        bank.notifyMotionStart(ungula::core::time::millis());
+
+        // Even ten hits past the threshold must not halt — we're
+        // inside the (very long) arm window.
+        for (int i = 0; i < 10; ++i) {
+                bank.simulateIsrEdgeForTesting(SensorRole::Stall);
+        }
+        EXPECT_EQ(engine.haltFromIsrCallCount, 0u);
+        // Diagnostic counter still increments.
+        EXPECT_EQ(bank.totalStallHits(), 10u);
+        // No latch — the engine wasn't halted.
+        EXPECT_FALSE(bank.consumeStallActivation());
+}
+
+TEST(SensorBankTest, NotifyMotionEndDisarmsAgainstFutureHit)
+{
+        // Audit P0-3 (covered for the bank layer): after
+        // `notifyMotionEnd`, a stall ISR hit must NOT halt the engine
+        // — armedAt is 0, so the ISR's arm-window check skips the
+        // halt path.
+        auto cfg = makeStallCfg(53, /*hitsToTrigger=*/1, /*armDelayMs=*/0);
+
+        FakePulseEngine engine;
+        SensorBank bank;
+        ASSERT_TRUE(bank.begin(&cfg, 1, &engine).ok());
+        bank.notifyMotionStart(armedInThePast());
+        bank.notifyMotionEnd();
+        EXPECT_FALSE(bank.isStallArmed());
+
+        bank.simulateIsrEdgeForTesting(SensorRole::Stall);
+        EXPECT_EQ(engine.haltFromIsrCallCount, 0u);
+        // Cumulative counter still increments — it's a diagnostic.
+        EXPECT_EQ(bank.totalStallHits(), 1u);
+        // No latched stall, since the engine wasn't halted.
+        EXPECT_FALSE(bank.consumeStallActivation());
 }
 
 } // namespace

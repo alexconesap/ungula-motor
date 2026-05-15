@@ -178,6 +178,32 @@ add_executable(test_ypmc_servo
 )
 target_link_libraries(test_ypmc_servo gtest_main)
 
+# ---------------------------------------------------------------------------
+# Driver kits — full Axis pipeline + driver helpers. The kit tests don't
+# call begin() on the chip (no real UART responses on host), but they
+# verify the factory paths, ownership rules, and the tandem-field
+# plumbing.
+# ---------------------------------------------------------------------------
+add_executable(test_tmc2209_kit
+    test_tmc2209_kit.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/drivers/tmc2209/tmc2209_kit.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/drivers/tmc2209/tmc2209_configurator.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/drivers/tmc2209/tmc2209_stallguard.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/drivers/tmc2209/tmc2209_coolstep.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/drivers/tmc2209/tmc2209_hal_uart.cpp
+    ${LIB_HAL_SRC}/ungula/hal/uart/platforms/uart_default.cpp
+    ${AXIS_SRC_FILES}
+)
+target_link_libraries(test_tmc2209_kit gtest_main)
+
+add_executable(test_ypmc_kit
+    test_ypmc_kit.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/drivers/ypmc/ypmc_kit.cpp
+    ${LIB_MOTOR_SRC}/ungula/motor/drivers/ypmc/ypmc_servo.cpp
+    ${AXIS_SRC_FILES}
+)
+target_link_libraries(test_ypmc_kit gtest_main)
+
 enable_testing()
 include(GoogleTest)
 gtest_discover_tests(test_motion_planner)
@@ -196,3 +222,5 @@ gtest_discover_tests(test_tmc2209_stallguard)
 gtest_discover_tests(test_tmc2209_coolstep)
 gtest_discover_tests(test_tmc2209_hal_uart_crc)
 gtest_discover_tests(test_ypmc_servo)
+gtest_discover_tests(test_tmc2209_kit)
+gtest_discover_tests(test_ypmc_kit)

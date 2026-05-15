@@ -137,7 +137,6 @@ class HomingController {
         HomingPhase phase_ = HomingPhase::Idle;
         StopReason failureReason_ = StopReason::None;
         int64_t startedAtMs_ = 0;
-        bool stepPendingSetHome_ = false;
 };
 
 } // namespace ungula::motor

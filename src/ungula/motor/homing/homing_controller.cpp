@@ -23,7 +23,6 @@ Status HomingController::begin(IHomingAxis &axis, int64_t nowMs)
         phase_ = HomingPhase::FastApproach;
         failureReason_ = StopReason::None;
         startedAtMs_ = nowMs;
-        stepPendingSetHome_ = false;
 
         const auto s = strategy_->begin(axis);
         if (!s.ok()) {

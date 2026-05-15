@@ -71,6 +71,31 @@ class HalPulseEngine final : public IPulseEngine {
                 /// toggling STEP for the first time. Industrial drives often
                 /// require ≥ 1 µs; we default to 5 µs as a safe baseline.
                 uint32_t dirSetupUs = 5;
+
+                /// Optional secondary DIR mirror for tandem-wired drives —
+                /// two drives sharing the same STEP signal, with separate
+                /// DIR inputs. The engine writes BOTH DIRs atomically in
+                /// `start()` so the `dirSetupUs` window covers both pins.
+                ///
+                ///   - `GPIO_NONE` (default) → no mirror, single-drive setup.
+                ///   - Otherwise, the engine writes this pin alongside the
+                ///     primary `dirPin` on every `start()`. The level is
+                ///     derived from the primary's intended level via
+                ///     `secondaryDirActiveHigh` (polarity of THIS pin in
+                ///     isolation) and `secondaryDirInverted` (whether the
+                ///     second drive should rotate the SAME physical
+                ///     direction as the primary or the OPPOSITE — relevant
+                ///     for motors mounted face-to-face on the same shaft).
+                ///
+                /// Use case: a coil-winding machine where two motors drive
+                /// the same mandrel from opposite ends. Both motors get
+                /// the same STEP train; the mounting forces opposite
+                /// electrical direction to produce the same physical
+                /// rotation, so `secondaryDirInverted = true`.
+                uint8_t secondaryDirPin = GPIO_NONE;
+                bool secondaryDirActiveHigh = true;
+                bool secondaryDirInverted = false;
+
                 /// Tick rate the HAL timer was (or will be) configured with.
                 /// Must match what the planner used to compute `halfPeriodTicks`
                 /// values in the segment list, otherwise pulse rates will scale

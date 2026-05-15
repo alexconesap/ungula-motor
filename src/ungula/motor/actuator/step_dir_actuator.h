@@ -99,6 +99,15 @@ class StepDirActuator final : public IAxisActuator {
                 /// industrial servo drives that use SRV-ON / SVON inputs.
                 bool enableActiveLow = true;
 
+                /// Optional secondary enable pin for tandem-wired drives.
+                /// `enable()` / `disable()` write both pins in sequence;
+                /// no timing-sensitive ordering between them (driver
+                /// servo-on debounce is typically tens of ms — much
+                /// longer than the inter-write gap).
+                /// `GPIO_NONE` (default) means single-drive setup.
+                uint8_t secondaryEnablePin = GPIO_NONE;
+                bool secondaryEnableActiveLow = true;
+
                 /// Capability flags. The corresponding digital-input read
                 /// paths are wired through `SensorBank` on the Axis layer;
                 /// storing the flags here keeps `capabilities()` honest so

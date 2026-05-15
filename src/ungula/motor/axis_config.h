@@ -54,6 +54,21 @@ struct StepDirStepperAxisConfig {
         bool enableActiveLow = true; // most stepper drivers are active-LOW EN
         uint32_t dirSetupUs = 5; // time in us to hold DIR stable before STEP rising edge
 
+        /// Optional tandem wiring: two drives share this axis's STEP pin,
+        /// each with its own DIR (and optionally its own EN). The pulse
+        /// engine writes the secondary DIR atomically with the primary
+        /// inside `start()`, both covered by the same `dirSetupUs` window.
+        /// `secondaryDirInverted = true` means the second drive rotates
+        /// the OPPOSITE electrical direction to produce the SAME physical
+        /// rotation as the primary (face-to-face mounting on a shared
+        /// shaft). All `secondary*` pins default to GPIO_NONE — set them
+        /// to enable tandem.
+        DirectionPin secondaryDirPin;
+        bool secondaryDirActiveHigh = true;
+        bool secondaryDirInverted = false;
+        EnablePin secondaryEnablePin;
+        bool secondaryEnableActiveLow = true;
+
         SensorInputConfig sensors
             [MAX_SENSOR_INPUTS]{}; // optional limit switches, stall input, etc. See `SensorRole` for valid roles.
         uint8_t sensorCount = 0; // number of valid entries in `sensors[]`
@@ -76,6 +91,17 @@ struct StepDirServoAxisConfig {
         bool alarmActiveLow = true; // industrial servos: ALM is open-collector, LOW = fault
         bool inPositionActiveHigh = true; // servos INP/COIN is open-collector, HIGH=in-position
         uint32_t dirSetupUs = 5; // time in us to hold DIR stable before STEP rising edge
+
+        /// Optional tandem wiring (see `StepDirStepperAxisConfig` for the
+        /// full description). Common case for this config: two industrial
+        /// servos (e.g. YPMC) sharing a STEP signal from one ESP32 pin,
+        /// each with its own DIR + SRV-ON, mounted face-to-face on a
+        /// shared shaft → `secondaryDirInverted = true`.
+        DirectionPin secondaryDirPin;
+        bool secondaryDirActiveHigh = true;
+        bool secondaryDirInverted = false;
+        EnablePin secondaryEnablePin;
+        bool secondaryEnableActiveLow = false; // industrial servo convention
 
         SensorInputConfig sensors[MAX_SENSOR_INPUTS]{};
         uint8_t sensorCount = 0;

@@ -35,3 +35,9 @@
 #include "ungula/motor/homing/homing_controller.h"
 #include "ungula/motor/homing/limit_switch_homing_strategy.h"
 #include "ungula/motor/homing/stall_homing_strategy.h"
+
+// Driver kits — single-call factories that bundle UART, configurator,
+// stall, CoolStep, brake controllers, etc. with the underlying Axis.
+// The compose-by-hand path above remains for advanced setups.
+#include "ungula/motor/drivers/tmc2209/tmc2209_kit.h"
+#include "ungula/motor/drivers/ypmc/ypmc_kit.h"

@@ -56,23 +56,48 @@ UNGULA_ISR_ATTR void SensorBank::onIsrTrampoline(void *ctx)
                 self->estopLatched_.store(true, std::memory_order_release);
                 break;
         case SensorRole::Stall: {
-                self->stallHitCounter_.fetch_add(1, std::memory_order_acq_rel);
-                // Cumulative diagnostic counter — incremented unconditionally
-                // so the host can see DIAG edges even when the debounce /
-                // arm-window logic discards them.
+                // Always count: the debounce counter feeds the
+                // task-side noise filter; the cumulative counter is a
+                // host-visible diagnostic for "is DIAG firing at all?".
+                const uint32_t prevCount = self->stallHitCounter_.fetch_add(
+                        1, std::memory_order_acq_rel);
                 self->stallHitsTotal_.fetch_add(1, std::memory_order_acq_rel);
+
                 const int64_t armedAt =
                         self->stallArmedAtMs_.load(std::memory_order_acquire);
                 if (armedAt == 0)
-                        break; // no motion in progress; no halt, no fault
+                        break; // not armed — service will discard the count
                 const int64_t now = ungula::core::time::millis();
                 if (now - armedAt <
                     static_cast<int64_t>(self->stallArmDelayMs_)) {
-                        break; // inside arm window; ignore
+                        break; // inside arm window
                 }
+
+                // Once a stall has been latched for this motion, the
+                // engine is already faulted — re-halting on subsequent
+                // edges is noise. The latch is reset by
+                // `consumeStallActivation()` from the task path.
+                if (self->stallLatched_.load(std::memory_order_acquire))
+                        break;
+
+                // Gated halt — only fire when the counter reaches the
+                // configured threshold. `prevCount` is the value
+                // before this hit, so the new count is prevCount + 1.
+                if (static_cast<uint32_t>(prevCount + 1) <
+                    static_cast<uint32_t>(self->stallHitsToTrigger_))
+                        break;
+
                 if (self->engineForIsr_) {
-                        self->engineForIsr_->haltFromIsr(StopReason::StallDetected);
+                        self->engineForIsr_->haltFromIsr(
+                                StopReason::StallDetected);
                 }
+                // Promote the count into the latch atomically here.
+                // The task-side service() path observes `stallLatched_`
+                // (via `consumeStallActivation`) and routes the event
+                // through the proper stall fault path; the engine is
+                // already halted so this is bookkeeping only.
+                self->stallLatched_.store(true, std::memory_order_release);
+                self->stallHitCounter_.store(0, std::memory_order_release);
                 break;
         }
         case SensorRole::CrashLimit:
@@ -283,6 +308,12 @@ void SensorBank::service(int64_t nowMs)
         //   3) Past the arm window: latch stall when count crosses
         //      threshold. The latch is what `consumeStallActivation()`
         //      returns.
+        // Service-side noise filter. The ISR is now responsible for the
+        // "past arm window AND hits >= threshold" promotion — it halts
+        // the engine and sets `stallLatched_` atomically when the
+        // counter crosses the threshold. Service() only cleans up
+        // counts that the ISR couldn't legitimately use (unarmed, or
+        // inside the arm window).
         const uint32_t hits = stallHitCounter_.load(std::memory_order_acquire);
         if (hits > 0) {
                 const int64_t armedAt = stallArmedAtMs_.load(std::memory_order_acquire);
@@ -290,18 +321,15 @@ void SensorBank::service(int64_t nowMs)
                 const bool pastWindow =
                         armed && (nowMs - armedAt) >=
                                          static_cast<int64_t>(stallArmDelayMs_);
-
                 if (!armed || !pastWindow) {
-                        // Discard everything counted so far — they were
-                        // either outside any motion or during the
-                        // auto-tune transient.
-                        stallHitCounter_.store(0, std::memory_order_release);
-                } else if (hits >= stallHitsToTrigger_) {
-                        stallLatched_.store(true, std::memory_order_release);
+                        // Discard noise outside the arm window. The ISR
+                        // left the counter alone; service clears it.
                         stallHitCounter_.store(0, std::memory_order_release);
                 }
-                // else: hits below threshold, past arm window — keep
-                // accumulating across service ticks.
+                // Past the arm window: leave sub-threshold counts in
+                // place so the next ISR edge can observe their
+                // progression. The ISR resets the counter when it
+                // promotes to a latched halt.
         }
 }
 
@@ -405,6 +433,23 @@ bool SensorBank::isAssertedLive(SensorRole role) const
 uint32_t SensorBank::totalStallHits() const
 {
         return stallHitsTotal_.load(std::memory_order_acquire);
+}
+
+bool SensorBank::isStallArmed() const
+{
+        return stallArmedAtMs_.load(std::memory_order_acquire) != 0;
+}
+
+void SensorBank::simulateIsrEdgeForTesting(SensorRole role)
+{
+        if (!begun_)
+                return;
+        for (uint8_t i = 0; i < isrBindingCount_; ++i) {
+                if (isrBindings_[i].role == role) {
+                        onIsrTrampoline(&isrBindings_[i]);
+                        return;
+                }
+        }
 }
 
 uint8_t SensorBank::homePin() const

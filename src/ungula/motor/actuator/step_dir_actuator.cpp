@@ -39,6 +39,17 @@ Status StepDirActuator::begin()
                 // disabled means HIGH; active-HIGH → disabled means LOW.
                 gpio::write(cfg_.enablePin, cfg_.enableActiveLow ? true : false);
         }
+        // Optional secondary enable for tandem-wired setups (two drives
+        // sharing the same STEP signal, each with its own SVON / EN
+        // input). No timing-sensitive ordering — both writes happen in
+        // sequence here and again in `enable` / `disable`.
+        if (cfg_.secondaryEnablePin != GPIO_NONE) {
+                if (!gpio::configOutput(cfg_.secondaryEnablePin)) {
+                        return Status::Err(ErrorCode::InvalidConfig);
+                }
+                gpio::write(cfg_.secondaryEnablePin,
+                            cfg_.secondaryEnableActiveLow ? true : false);
+        }
 
         // Bring the pulse engine up. PulseMode::Internal is the only
         // supported mode; External is rejected by the engine itself.
@@ -59,6 +70,10 @@ Status StepDirActuator::enable()
         if (cfg_.enablePin != GPIO_NONE) {
                 // active-LOW → enabled = LOW. active-HIGH → enabled = HIGH.
                 gpio::write(cfg_.enablePin, cfg_.enableActiveLow ? false : true);
+        }
+        if (cfg_.secondaryEnablePin != GPIO_NONE) {
+                gpio::write(cfg_.secondaryEnablePin,
+                            cfg_.secondaryEnableActiveLow ? false : true);
         }
         enabled_ = true;
         return Status::Ok();
@@ -82,6 +97,10 @@ Status StepDirActuator::disable()
 
         if (cfg_.enablePin != GPIO_NONE) {
                 gpio::write(cfg_.enablePin, cfg_.enableActiveLow ? true : false);
+        }
+        if (cfg_.secondaryEnablePin != GPIO_NONE) {
+                gpio::write(cfg_.secondaryEnablePin,
+                            cfg_.secondaryEnableActiveLow ? true : false);
         }
         enabled_ = false;
         return Status::Ok();

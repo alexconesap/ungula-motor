@@ -218,6 +218,16 @@ class Axis : public IHomingAxis {
         /// 0 if no Stall sensor is configured.
         uint32_t totalStallHits() const;
 
+        /// Test-only passthrough that fires one synthetic ISR edge on
+        /// the configured sensor of `role`. Used by host tests to
+        /// exercise E-stop precedence, stall debounce, and similar
+        /// paths without a real GPIO. Production code MUST NOT call
+        /// this.
+        void simulateSensorIsrForTesting(SensorRole role)
+        {
+                sensors_.simulateIsrEdgeForTesting(role);
+        }
+
         // --- Service path ------------------------------------------------
 
         /// Single periodic update. `nowMs` is monotonic milliseconds. Host

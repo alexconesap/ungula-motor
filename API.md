@@ -276,7 +276,7 @@ When to use this: host integration tests, custom timer backends, or alternative 
 
 enum class AxisState : uint8_t {
     Uninitialized, Disabled, Idle, Moving, Jogging,
-    Homing, Stopping, Faulted, EmergencyStopped,
+    Homing, Faulted, EmergencyStopped,
 };
 ```
 
@@ -1051,6 +1051,102 @@ namespace tmc = ungula::motor::tmc2209;
 const uint32_t drv = transport.readRegister(tmc::reg::DRV_STATUS).valueOr(0);
 if (drv & tmc::drv_status::FAULT_MASK) { /* any drive-fault condition */ }
 ```
+
+---
+
+## Driver kits
+
+Kits are single-call factories that bundle every helper a typical
+host would otherwise construct by hand into one `unique_ptr`.
+
+### TMC2209 — `tmc2209::StepperKit`
+
+Header: `ungula/motor/drivers/tmc2209/tmc2209_kit.h` (auto-included via
+`ungula/motor.h`).
+
+```cpp
+namespace tmc = ungula::motor::tmc2209;
+
+tmc::StepperKitConfig cfg;
+cfg.common = ...;            // AxisCommonConfig (id, units, limits)
+cfg.stepPin = StepPin{18};
+cfg.dirPin  = DirectionPin{19};
+cfg.enablePin = EnablePin{21};
+cfg.uartPort = 1; cfg.uartBaud = 115200;
+cfg.uartTxPin = 17; cfg.uartRxPin = 16;
+cfg.slaveAddress = 0;
+cfg.chip.runCurrentMa = 800;
+// Optional:
+cfg.useStallGuard = true; cfg.stall.sgThreshold = 20;
+cfg.useCoolStep = true;
+
+auto kit = tmc::makeStepperKit(cfg).takeValue();  // owns the UART
+kit->begin();                                      // uart + chip + axis
+kit->axis->enable();
+kit->axis->moveBy(3200);
+```
+
+For N motors on one UART, use the shared-UART factory:
+
+```cpp
+ungula::hal::uart::Uart bus(2);
+bus.begin(115200, /*tx=*/17, /*rx=*/16);
+auto m1 = tmc::makeStepperKitOnUart(bus, /*addr=*/0, cfgA).takeValue();
+auto m2 = tmc::makeStepperKitOnUart(bus, /*addr=*/1, cfgB).takeValue();
+m1->begin(); m2->begin();
+```
+
+`cfg.slaveAddress` is ignored by `makeStepperKitOnUart()` — the
+explicit parameter wins. The kit does NOT own a shared UART; the
+host must keep it alive at least as long as every kit using it.
+
+### YPMC + S2SVD15 — `ypmc::YpmcServoKit`
+
+Header: `ungula/motor/drivers/ypmc/ypmc_kit.h`.
+
+```cpp
+namespace ypmc = ungula::motor::ypmc;
+
+ypmc::ServoKitConfig cfg;
+cfg.common = ...;
+cfg.stepPin = StepPin{18}; cfg.dirPin = DirectionPin{19};
+cfg.enablePin = EnablePin{21};         // SRV-ON
+cfg.alarmInputPin = InputPin{34};       // ALM
+cfg.inPositionInputPin = InputPin{35};  // COIN
+cfg.useBrake = true;
+cfg.brake.brakeReleasePin = 25;
+
+auto kit = ypmc::makeServoKit(cfg).takeValue();
+kit->begin();                                    // brake + axis + subscribe
+kit->axis->enable();
+delay(60);
+kit->brake->release();
+kit->axis->moveBy(10000);
+```
+
+### Tandem STEP/DIR
+
+Both kit configs (and the underlying `StepDirStepperAxisConfig` /
+`StepDirServoAxisConfig`) carry a `secondary*` group of fields for
+"two drives sharing one STEP pin":
+
+```cpp
+cfg.secondaryDirPin       = DirectionPin{22};
+cfg.secondaryDirActiveHigh = true;
+cfg.secondaryDirInverted  = true;     // face-to-face mounting
+cfg.secondaryEnablePin    = EnablePin{23};
+cfg.secondaryEnableActiveLow = false; // industrial servo SRV-ON convention
+```
+
+The pulse engine writes both DIRs atomically inside the same
+`dirSetupUs` window. `enable()` / `disable()` flip both EN pins.
+`secondaryDirInverted = true` produces the same physical rotation
+from both motors when they are mounted face-to-face on a shared
+shaft.
+
+The axis remains a single planner-level concept — one trajectory,
+one event stream, one feedback record. The "second motor" is purely
+a GPIO multiplexing concern at the engine + actuator layers.
 
 ---
 

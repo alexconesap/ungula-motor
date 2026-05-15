@@ -20,7 +20,6 @@ enum class AxisState : uint8_t {
         Moving,
         Jogging,
         Homing,
-        Stopping,
         Faulted,
         EmergencyStopped,
 };
@@ -72,8 +71,6 @@ inline const char *axisStateToString(AxisState s)
                 return "Jogging";
         case AxisState::Homing:
                 return "Homing";
-        case AxisState::Stopping:
-                return "Stopping";
         case AxisState::Faulted:
                 return "Faulted";
         case AxisState::EmergencyStopped:

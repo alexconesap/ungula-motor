@@ -250,4 +250,36 @@ TEST(StepDirActuatorTest, InjectedEngineFaultSurfaces)
         EXPECT_EQ(fs.code, FaultCode::PulseEngineFault);
 }
 
+// =====================================================================
+// Tandem ENABLE (secondaryEnablePin)
+// =====================================================================
+// Host GPIO is a no-op stub — these tests verify the secondary-EN code
+// path is reachable and does not crash. A bench build is the real check
+// for both EN pins flipping on `enable()` / `disable()`.
+
+TEST(StepDirActuatorTest, SecondaryEnablePinIsAccepted)
+{
+        FakePulseEngine engine;
+        StepDirActuator::Config c = makeCfg();
+        c.enablePin = 14;
+        c.secondaryEnablePin = 15;
+        c.secondaryEnableActiveLow = false; // industrial servo SRV-ON style
+        StepDirActuator actuator(engine, c);
+        ASSERT_TRUE(actuator.begin().ok());
+        EXPECT_TRUE(actuator.enable().ok());
+        EXPECT_TRUE(actuator.disable().ok());
+}
+
+TEST(StepDirActuatorTest, SecondaryEnableUnsetLeavesBehaviourUnchanged)
+{
+        FakePulseEngine engine;
+        StepDirActuator::Config c = makeCfg();
+        c.enablePin = 14;
+        c.secondaryEnablePin = GPIO_NONE; // single-drive setup
+        StepDirActuator actuator(engine, c);
+        ASSERT_TRUE(actuator.begin().ok());
+        EXPECT_TRUE(actuator.enable().ok());
+        EXPECT_TRUE(actuator.disable().ok());
+}
+
 } // namespace

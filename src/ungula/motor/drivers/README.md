@@ -109,6 +109,32 @@ Only change actuator/facade code when strictly required.
 - For CAN servos: implement protocol calls so `armMotion/startMotion/stop` contracts are honored.
 - Never silently downgrade stop semantics (`Decelerate` must not become `Immediate`).
 
+### 8a) Provide a `<vendor>_kit` factory
+
+Each driver SHOULD ship a kit alongside its other files
+(`<vendor>_kit.{h,cpp}`). The kit bundles every helper a typical
+host would otherwise construct by hand — UART/transport, configurator,
+diagnostics (when relevant), the `Axis` itself, optional brake or
+limit-switch controllers — into one factory.
+
+Conventions:
+
+- Factory returns `Result<std::unique_ptr<Kit>>`.
+- Kit members are `std::unique_ptr` — no file-scope state, so N kits
+  coexist in one project.
+- For bus-shared transports (UART, CAN), provide a second factory
+  `make<Vendor>KitOn<Bus>(bus&, slaveAddress, cfg)` that takes a
+  pre-`begin()`-ed bus reference and does NOT own it. The owned-bus
+  factory remains the simple-case entry point.
+- `Kit::begin()` runs the lifecycle in order: bring up the bus (if
+  owned), configure the chip, attach optional helpers, then call
+  `axis->begin()`.
+- The compose-by-hand path must keep working — kits sit alongside,
+  they do not replace.
+
+See `drivers/tmc2209/tmc2209_kit.{h,cpp}` and
+`drivers/ypmc/ypmc_kit.{h,cpp}` for reference implementations.
+
 ## 9) Test requirements (host side)
 
 Add tests under `tests/` for all new behavior.

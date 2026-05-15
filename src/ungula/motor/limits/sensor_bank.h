@@ -145,6 +145,19 @@ class SensorBank {
         /// window or `stallHitsToTrigger`.
         uint32_t totalStallHits() const;
 
+        /// True iff a motion-start has armed the stall window and no
+        /// motion-end / disarm has cleared it since. Diagnostic /
+        /// test-only — production code should not branch on this.
+        bool isStallArmed() const;
+
+        /// Test-only: synthesise one ISR edge for the configured
+        /// sensor of `role`. Calls the same trampoline the real GPIO
+        /// ISR calls, with identical side effects. No-op when no
+        /// sensor of that role is configured. Production code MUST
+        /// NOT call this — the real ISR path runs from interrupt
+        /// context via `lib_hal::gpio::addIsrHandler`.
+        void simulateIsrEdgeForTesting(SensorRole role);
+
     private:
         /// Per-sensor runtime state. Polled sensors track debounce
         /// history; ISR sensors carry a pointer to the bank's atomic

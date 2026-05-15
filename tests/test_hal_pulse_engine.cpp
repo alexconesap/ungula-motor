@@ -403,4 +403,57 @@ TEST(HalPulseEngineTest, ConsecutiveMovesSucceedWithoutBackendError)
         EXPECT_EQ(eng.commandedPositionSteps(), 8);
 }
 
+// =====================================================================
+// Tandem DIR (secondaryDirPin)
+// =====================================================================
+// Host GPIO is a no-op stub — these are smoke tests: the new code path
+// must not crash the engine, and configuration plumbing must accept the
+// tandem fields without rejection. A bench / ESP32 build is the real
+// verifier for both DIR pins flipping inside the dirSetupUs window.
+
+TEST(HalPulseEngineTest, TandemDirPinConfiguresAndRuns)
+{
+        HwTimerFake timer;
+        auto cfg = makeConfig();
+        cfg.secondaryDirPin = 21;
+        cfg.secondaryDirActiveHigh = true;
+        cfg.secondaryDirInverted = false;
+        HalPulseEngine eng(timer, cfg);
+        ASSERT_TRUE(eng.begin(PulseMode::Internal).ok());
+        ASSERT_TRUE(eng.loadMove(makeMove(Direction::Forward, 4)).ok());
+        ASSERT_TRUE(eng.start().ok());
+        timer.fireMany(2 * 4 + 5);
+        EXPECT_EQ(eng.commandedPositionSteps(), 4);
+}
+
+TEST(HalPulseEngineTest, TandemDirPinInvertedBranchExercised)
+{
+        HwTimerFake timer;
+        auto cfg = makeConfig();
+        cfg.secondaryDirPin = 21;
+        cfg.secondaryDirActiveHigh = true;
+        cfg.secondaryDirInverted = true; // face-to-face mounting case
+        HalPulseEngine eng(timer, cfg);
+        ASSERT_TRUE(eng.begin(PulseMode::Internal).ok());
+        ASSERT_TRUE(eng.loadMove(makeMove(Direction::Backward, 3)).ok());
+        ASSERT_TRUE(eng.start().ok());
+        timer.fireMany(2 * 3 + 5);
+        EXPECT_EQ(eng.commandedPositionSteps(), -3);
+}
+
+TEST(HalPulseEngineTest, NoSecondaryDirPinLeavesBehaviourUnchanged)
+{
+        // Regression: the new code branch must be a no-op when
+        // secondaryDirPin = GPIO_NONE (single-motor wiring).
+        HwTimerFake timer;
+        auto cfg = makeConfig();
+        cfg.secondaryDirPin = GPIO_NONE;
+        HalPulseEngine eng(timer, cfg);
+        ASSERT_TRUE(eng.begin(PulseMode::Internal).ok());
+        ASSERT_TRUE(eng.loadMove(makeMove(Direction::Forward, 4)).ok());
+        ASSERT_TRUE(eng.start().ok());
+        timer.fireMany(2 * 4 + 5);
+        EXPECT_EQ(eng.commandedPositionSteps(), 4);
+}
+
 } // namespace

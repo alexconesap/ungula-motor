@@ -58,6 +58,18 @@ Status HalPulseEngine::begin(PulseMode mode)
                                      true); // forward = HIGH by default; idle = !forward
         stepPinHigh_ = false;
 
+        // Optional secondary DIR mirror — see `Config::secondaryDirPin`
+        // doc. We seed it to "idle" (the polarity-neutral, non-forward
+        // state) the same way the primary is seeded above; `start()`
+        // writes the real polarity-resolved level alongside the primary.
+        if (cfg_.secondaryDirPin != GPIO_NONE) {
+                if (!gpio::configOutput(cfg_.secondaryDirPin)) {
+                        return Status::Err(ErrorCode::InvalidConfig);
+                }
+                const bool idleSecondaryHigh = cfg_.secondaryDirActiveHigh ? false : true;
+                gpio::write(cfg_.secondaryDirPin, idleSecondaryHigh);
+        }
+
         // Bring up the HAL timer and wire its ISR callback to us.
         timer::HwTimerConfig tcfg;
         tcfg.resolutionHz = cfg_.timerResolutionHz;
@@ -140,6 +152,24 @@ Status HalPulseEngine::start()
         const bool wantHigh = (move_.direction == Direction::Forward) ? cfg_.dirActiveHigh :
                                                                         !cfg_.dirActiveHigh;
         gpio::write(cfg_.dirPin, wantHigh);
+
+        // Optional secondary DIR mirror — written BEFORE the dirSetupUs
+        // delay so the same setup window covers both pins. The intent
+        // ("does motor 2 turn the same physical direction as motor 1?")
+        // is encoded by `secondaryDirInverted`: when true, the second
+        // drive sees the OPPOSITE electrical polarity to produce the
+        // SAME shaft rotation as the primary (face-to-face mounting).
+        if (cfg_.secondaryDirPin != GPIO_NONE) {
+                // First map the move direction to "logical forward / backward"
+                // (independent of the primary's wiring), then apply the
+                // secondary's polarity + the optional invert.
+                const bool secondaryWantForward =
+                        (move_.direction == Direction::Forward) != cfg_.secondaryDirInverted;
+                const bool secondaryHigh = secondaryWantForward ?
+                                                   cfg_.secondaryDirActiveHigh :
+                                                   !cfg_.secondaryDirActiveHigh;
+                gpio::write(cfg_.secondaryDirPin, secondaryHigh);
+        }
 
         // Hold DIR stable before the first STEP edge. We're in task
         // context — `delayUs` is the project's busy-wait API.

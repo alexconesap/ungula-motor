@@ -23,6 +23,7 @@ Pulse generation lives inside a hardware-timer ISR. Everything else — the main
 - [Idle policy and the `AutoDisableOnIdle` listener](#idle-policy-and-the-autodisableonidle-listener)
 - [Stall-based homing](#stall-based-homing)
 - [The service loop](#the-service-loop)
+- [Blocking move wait (20 cm)](#blocking-move-wait-20-cm)
 - [Events](#events)
 - [Sensors, limits, and safety inputs](#sensors-limits-and-safety-inputs)
 - [TMC2209 driver split](#tmc2209-driver-split)
@@ -123,9 +124,95 @@ ungula::motor
 
 `Axis` is the only type most applications need. The factories validate the config, allocate the underlying components, and return a fully wired axis ready for `begin()`.
 
-## Quick start — open-loop stepper (TMC2209)
+For a per-class deep dive — who owns what, ISR vs. task boundaries,
+how a `moveBy()` call turns into STEP edges, how DIAG edges become
+`FaultCode::Stall` — see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
+For driver authoring (adding a new chip / drive integration under
+`drivers/<vendor_model>/`) see the
+[driver authoring guide](src/ungula/motor/drivers/README.md).
 
-The canonical setup: ESP32 + TMC2209 + NEMA17 stepper.
+## Quick start — TMC2209 kit (recommended)
+
+The kit factory bundles every TMC2209 helper plus the underlying axis. One call, one returned `unique_ptr`. Use this for new code.
+
+```cpp
+#include <Arduino.h>
+#include <ungula/motor.h>
+
+using namespace ungula::motor;
+
+std::unique_ptr<tmc2209::StepperKit> motor;
+
+void setup() {
+    tmc2209::StepperKitConfig cfg;
+    cfg.common.axisId            = AxisId(0);
+    cfg.common.units.stepsPerMm  = 80.0f;
+    cfg.common.limits.maxVelocitySps = 8000;
+    cfg.common.limits.accelSpsPerSec = 20000;
+    cfg.common.limits.decelSpsPerSec = 20000;
+    cfg.common.limits.maxStepRateSps = 200000;
+
+    cfg.stepPin   = StepPin{18};
+    cfg.dirPin    = DirectionPin{19};
+    cfg.enablePin = EnablePin{21};
+
+    cfg.uartPort     = 1;          // ESP32 UART1
+    cfg.uartBaud     = 115200;
+    cfg.uartTxPin    = 17;
+    cfg.uartRxPin    = 16;
+    cfg.slaveAddress = 0;
+
+    cfg.chip.runCurrentMa      = 800;
+    cfg.chip.holdCurrentMa     = 300;
+    cfg.chip.senseResistorOhms = 0.11f;
+
+    // Optional: enable StallGuard if you wired the DIAG pin to a GPIO
+    // and added a `SensorRole::Stall` entry to `cfg.sensors`.
+    cfg.useStallGuard       = true;
+    cfg.stall.sgThreshold   = 20;
+    cfg.stall.tCoolThrs     = 0xFFFFF;
+
+    auto r = tmc2209::makeStepperKit(cfg);
+    if (!r.ok()) { Serial.println("kit failed"); return; }
+    motor = r.takeValue();
+
+    motor->begin();             // brings up UART + chip + axis
+    motor->axis->enable();
+}
+
+void loop() {
+    motor->axis->service(millis());
+    if (motor->axis->state() == AxisState::Idle) {
+        motor->axis->moveBy(3200);
+    }
+}
+```
+
+### Two TMC2209s on one UART
+
+For N-motor projects, share a single UART and give each kit its own NAI[1:0] slave address:
+
+```cpp
+ungula::hal::uart::Uart bus(2);                  // host owns the UART
+std::unique_ptr<tmc2209::StepperKit> motorA;
+std::unique_ptr<tmc2209::StepperKit> motorB;
+
+void setup() {
+    bus.begin(115200, /*tx=*/17, /*rx=*/16);
+
+    motorA = tmc2209::makeStepperKitOnUart(bus, /*addr=*/0, cfgA).takeValue();
+    motorB = tmc2209::makeStepperKitOnUart(bus, /*addr=*/1, cfgB).takeValue();
+
+    motorA->begin();
+    motorB->begin();
+}
+```
+
+The kits do not own the UART — the host keeps it alive.
+
+## Quick start — TMC2209 by hand (advanced)
+
+The original compose-by-hand path stays available for non-standard wiring (custom pulse engine, custom UART buffer sizes, etc.).
 
 ```cpp
 #include <Arduino.h>
@@ -317,6 +404,52 @@ command. See [`examples/ypmc_servo_brake/`](examples/ypmc_servo_brake/)
 for the full sketch and
 [`src/ungula/motor/drivers/ypmc/README.md`](src/ungula/motor/drivers/ypmc/README.md)
 for S2SVD15 wiring and tuning notes.
+
+### YPMC kit shortcut
+
+`makeServoKit(cfg)` does the same work as the by-hand sketch above:
+builds the axis via `Axis::createStepDirServo`, applies the S2SVD15
+defaults, optionally constructs a `BrakeController` and subscribes it
+to the event bus.
+
+```cpp
+ypmc::ServoKitConfig cfg;
+cfg.common.axisId = AxisId(0);
+cfg.common.units.stepsPerMm = 1000.0f;
+cfg.common.limits.maxVelocitySps = 200'000;
+cfg.common.limits.accelSpsPerSec = 800'000;
+cfg.common.limits.decelSpsPerSec = 800'000;
+cfg.stepPin            = StepPin{ 18 };
+cfg.dirPin             = DirectionPin{ 19 };
+cfg.enablePin          = EnablePin{ 21 };           // SRV-ON
+cfg.alarmInputPin      = InputPin{ 34 };
+cfg.inPositionInputPin = InputPin{ 35 };
+cfg.useBrake           = true;
+cfg.brake.brakeReleasePin = 25;
+
+auto kit = ypmc::makeServoKit(cfg).takeValue();
+kit->begin();              // brake.begin() + axis->begin() + subscribe
+kit->axis->enable();
+delay(60);
+kit->brake->release();     // before the first move
+kit->axis->moveBy(10000);
+```
+
+### Tandem YPMCs on one STEP pin
+
+For two YPMCs sharing one STEP signal (e.g. mounted face-to-face on
+the same shaft), set the `secondary*` pin fields:
+
+```cpp
+cfg.secondaryDirPin       = DirectionPin{ 22 };
+cfg.secondaryEnablePin    = EnablePin{ 23 };
+cfg.secondaryDirInverted  = true;   // face-to-face → opposite electrical dir
+```
+
+The pulse engine writes both DIRs atomically inside the same
+`dirSetupUs` window. `enable()` / `disable()` flip both SRV-ON pins.
+`secondaryDirInverted = true` produces the same physical rotation
+from both motors despite opposite mounting.
 
 ## Quick start — limit-switch homing
 
@@ -643,6 +776,120 @@ extern "C" void app_main(void) {
 `yield()` knows the tick from the platform header and always blocks for exactly one tick — no magic millisecond constant in your code. On the host backend it maps to `std::this_thread::yield()`, which is correct for host tests (no watchdog to feed).
 
 If you need a *specific* cadence (e.g. 5 ms periodic sampling decoupled from the FreeRTOS tick), use `delayUntilMs()` with a value that rounds to ≥ 1 tick. The pulse engine doesn't care about service cadence — it lives in the timer ISR and runs autonomously. The cadence only affects sensor debounce latency and homing FSM responsiveness.
+
+## Blocking move wait (20 cm)
+
+If you want to command a move and block until it either reaches target or stops for another reason (stall, limit, fault, user stop), run a bounded `while` loop that keeps calling `service()`.
+
+The important part is not the loop itself, but the exit criteria:
+
+- keep servicing the axis every iteration
+- treat `Idle` and `Disabled` as terminal (AutoDisable can move `Idle -> Disabled` immediately after completion)
+- inspect `lastStopReason()` and `faultStatus()` to classify why motion ended
+- add a timeout so a miswired system cannot block forever
+
+```cpp
+#include <cstdint>
+
+#include <ungula/core/time/time.h>
+#include <ungula/motor.h>
+
+using namespace ungula::motor;
+
+enum class MoveWaitOutcome : uint8_t {
+    ReachedTarget,
+    StoppedByLimit,
+    StoppedByStall,
+    StoppedByUser,
+    Faulted,
+    Timeout,
+    CommandRejected,
+};
+
+struct MoveWaitResult {
+    MoveWaitOutcome outcome = MoveWaitOutcome::Faulted;
+    StopReason stopReason = StopReason::None;
+    FaultStatus fault{};
+};
+
+MoveWaitResult moveBy20CmAndWait(Axis& axis, uint32_t timeoutMs)
+{
+    MoveWaitResult result;
+
+    const Status cmd = axis.moveBy(/*delta=*/20, DistanceUnit::Cm);
+    if (!cmd.ok()) {
+        result.outcome = MoveWaitOutcome::CommandRejected;
+        return result;
+    }
+
+    const int64_t startedAtMs = ungula::core::time::millis();
+
+    while (true) {
+        const int64_t nowMs = ungula::core::time::millis();
+        axis.service(nowMs);
+
+        const AxisState st = axis.state();
+        const StopReason reason = axis.lastStopReason();
+        const FaultStatus fault = axis.faultStatus();
+
+        if (st == AxisState::Faulted || st == AxisState::EmergencyStopped) {
+            result.outcome = MoveWaitOutcome::Faulted;
+            result.stopReason = reason;
+            result.fault = fault;
+            return result;
+        }
+
+        if (st == AxisState::Idle || st == AxisState::Disabled) {
+            result.stopReason = reason;
+            result.fault = fault;
+            switch (reason) {
+            case StopReason::TargetReached:
+                result.outcome = MoveWaitOutcome::ReachedTarget;
+                break;
+            case StopReason::TravelLimit:
+            case StopReason::LimitSwitch:
+                result.outcome = MoveWaitOutcome::StoppedByLimit;
+                break;
+            case StopReason::StallDetected:
+                result.outcome = MoveWaitOutcome::StoppedByStall;
+                break;
+            case StopReason::UserStop:
+                result.outcome = MoveWaitOutcome::StoppedByUser;
+                break;
+            default:
+                result.outcome = fault.active() ? MoveWaitOutcome::Faulted :
+                                                 MoveWaitOutcome::StoppedByUser;
+                break;
+            }
+            return result;
+        }
+
+        if (timeoutMs > 0 && (nowMs - startedAtMs) >= static_cast<int64_t>(timeoutMs)) {
+            (void) axis.stop(StopMode::Immediate);
+            result.outcome = MoveWaitOutcome::Timeout;
+            result.stopReason = axis.lastStopReason();
+            result.fault = axis.faultStatus();
+            return result;
+        }
+
+        // In raw app_main loops this prevents starving IDLE/WDT.
+        ungula::core::time::yield();
+    }
+}
+```
+
+Typical use:
+
+```cpp
+MoveWaitResult r = moveBy20CmAndWait(*axis, /*timeoutMs=*/15000);
+if (r.outcome == MoveWaitOutcome::ReachedTarget) {
+    // success
+} else {
+    // inspect r.outcome, r.stopReason, r.fault
+}
+```
+
+This pattern is safe for one-shot "go there and wait" flows in setup, calibration, recipe steps, and test routines.
 
 ## Events
 

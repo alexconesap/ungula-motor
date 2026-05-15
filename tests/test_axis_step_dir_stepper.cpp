@@ -204,6 +204,78 @@ TEST(AxisStepDirStepperTest, SafetyInterlockSilentWhenNoIsrSafetySensors)
         EXPECT_EQ(axis->state(), AxisState::Idle);
 }
 
+// =====================================================================
+// E-stop precedence — audit P0-5
+// =====================================================================
+// Previously the three `consume*Activation` branches in `pumpSensors`
+// were independent `if`s, so a stall or crash latch landing in the
+// same tick as an E-stop would overwrite `state_`. The fix consumes
+// all three latches but only the highest-precedence one writes state.
+
+TEST(AxisStepDirStepperTest, EstopWinsOverCrashAndStallInSameTick)
+{
+        StepDirStepperAxisConfig cfg = makeStepperCfg();
+        // Three ISR-role sensors covering all the relevant precedences.
+        cfg.sensors[0].pin = 33;
+        cfg.sensors[0].role = SensorRole::EmergencyStop;
+        cfg.sensors[0].polarity = SensorPolarity::NormallyClosed;
+        cfg.sensors[1].pin = 27;
+        cfg.sensors[1].role = SensorRole::CrashLimit;
+        cfg.sensors[1].polarity = SensorPolarity::NormallyClosed;
+        cfg.sensors[2].pin = 26;
+        cfg.sensors[2].role = SensorRole::Stall;
+        cfg.sensors[2].polarity = SensorPolarity::NormallyOpen;
+        cfg.sensors[2].stallHitsToTrigger = 1; // halt on first edge
+        cfg.sensors[2].stallArmDelayMs = 0;
+        cfg.sensorCount = 3;
+
+        auto r = Axis::createStepDirStepper(cfg);
+        ASSERT_TRUE(r.ok());
+        auto axis = r.takeValue();
+        ASSERT_TRUE(axis->begin().ok());
+
+        // All three latches fire in the same window before service().
+        axis->simulateSensorIsrForTesting(SensorRole::EmergencyStop);
+        axis->simulateSensorIsrForTesting(SensorRole::CrashLimit);
+        axis->simulateSensorIsrForTesting(SensorRole::Stall);
+
+        axis->service(100);
+
+        // E-stop dominates: state and stopReason reflect EmergencyStop
+        // even though all three latches were set.
+        EXPECT_EQ(axis->state(), AxisState::EmergencyStopped);
+        EXPECT_EQ(axis->lastStopReason(), StopReason::EmergencyStop);
+}
+
+TEST(AxisStepDirStepperTest, CrashWinsOverStallInSameTick)
+{
+        // Same precedence test, without an E-stop: crash dominates
+        // over stall.
+        StepDirStepperAxisConfig cfg = makeStepperCfg();
+        cfg.sensors[0].pin = 27;
+        cfg.sensors[0].role = SensorRole::CrashLimit;
+        cfg.sensors[0].polarity = SensorPolarity::NormallyClosed;
+        cfg.sensors[1].pin = 26;
+        cfg.sensors[1].role = SensorRole::Stall;
+        cfg.sensors[1].polarity = SensorPolarity::NormallyOpen;
+        cfg.sensors[1].stallHitsToTrigger = 1;
+        cfg.sensors[1].stallArmDelayMs = 0;
+        cfg.sensorCount = 2;
+
+        auto r = Axis::createStepDirStepper(cfg);
+        ASSERT_TRUE(r.ok());
+        auto axis = r.takeValue();
+        ASSERT_TRUE(axis->begin().ok());
+
+        axis->simulateSensorIsrForTesting(SensorRole::CrashLimit);
+        axis->simulateSensorIsrForTesting(SensorRole::Stall);
+
+        axis->service(100);
+
+        EXPECT_EQ(axis->state(), AxisState::Faulted);
+        EXPECT_EQ(axis->lastStopReason(), StopReason::LimitSwitch);
+}
+
 TEST(AxisStepDirStepperTest, OwnershipDestructsCleanly)
 {
         // No explicit assertions — this test exists so the address
