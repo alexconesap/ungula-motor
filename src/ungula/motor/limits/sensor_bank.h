@@ -30,6 +30,14 @@ namespace ungula::motor
 ///     latch on its next tick and dispatches the corresponding event
 ///     from task context.
 ///
+///   - **Stall**: ISR-driven like CrashLimit, with two extra knobs to
+///     filter false positives. ISR increments an atomic counter; the
+///     service tick latches the stall only when the counter exceeds
+///     `stallHitsToTrigger` AND we are past the `stallArmDelayMs`
+///     window that begins at each motion start. Reports
+///     `StopReason::StallDetected` to distinguish from a generic
+///     crash limit.
+///
 /// ## Concurrency
 ///
 ///   - `begin` / `end` / `service` are TASK-context only.
@@ -84,6 +92,19 @@ class SensorBank {
         /// `consumeCrashActivation()`.
         bool consumeEstopActivation();
 
+        /// Consume the stall latch. Returns true exactly once after the
+        /// ISR-hit counter exceeds `stallHitsToTrigger` outside the arm
+        /// window. Same semantics as the other `consume*Activation`
+        /// methods.
+        bool consumeStallActivation();
+
+        /// Notify the bank that motion has just started. Resets the
+        /// stall hit counter and arms the `stallArmDelayMs` window so
+        /// auto-tune transients in the first ms of motion do not get
+        /// counted as stall hits. Idempotent; cheap; safe to call from
+        /// task context only.
+        void notifyMotionStart(int64_t nowMs);
+
         /// Pin number of the first home sensor configured, or `GPIO_NONE`
         /// if none. Convenience for homing strategies.
         uint8_t homePin() const;
@@ -127,6 +148,15 @@ class SensorBank {
 
         std::atomic<bool> crashLatched_{ false };
         std::atomic<bool> estopLatched_{ false };
+
+        // Stall debounce state. Counter is incremented from ISR context;
+        // service() reads + resets it from task context. Threshold and
+        // arm window come from the first Stall sensor's config.
+        std::atomic<uint32_t> stallHitCounter_{ 0 };
+        std::atomic<bool> stallLatched_{ false };
+        uint8_t stallHitsToTrigger_ = 4;
+        uint16_t stallArmDelayMs_ = 200;
+        int64_t stallArmedAtMs_ = 0; // start-of-motion timestamp; 0 = not armed
 
         bool begun_ = false;
 };

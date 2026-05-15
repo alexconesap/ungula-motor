@@ -16,7 +16,21 @@ namespace
 
         constexpr bool isIsrRole(SensorRole r)
         {
-                return r == SensorRole::CrashLimit || r == SensorRole::EmergencyStop;
+                return r == SensorRole::CrashLimit || r == SensorRole::EmergencyStop ||
+                       r == SensorRole::Stall;
+        }
+
+        constexpr StopReason isrStopReason(SensorRole r)
+        {
+                switch (r) {
+                case SensorRole::EmergencyStop:
+                        return StopReason::EmergencyStop;
+                case SensorRole::Stall:
+                        return StopReason::StallDetected;
+                case SensorRole::CrashLimit:
+                default:
+                        return StopReason::LimitSwitch;
+                }
         }
 
 } // namespace
@@ -38,19 +52,31 @@ UNGULA_ISR_ATTR void SensorBank::onIsrTrampoline(void *ctx)
         SensorBank *self = binding->bank;
 
         // Halt the pulse engine FIRST. Latency on this path is the whole
-        // point of wiring crash/estop to an interrupt — drop everything
-        // else, get the steps to stop, then bookkeep.
+        // point of wiring an ISR — drop everything else, get the steps
+        // to stop, then bookkeep. NOTE: for Stall we halt unconditionally
+        // here even though the task-context service path may still
+        // discard the event as "inside arm window". The cost of a
+        // discarded halt is a short motion glitch; the cost of NOT
+        // halting in the ISR is steps continuing through a real stall
+        // until the next service tick. Halt wins.
         if (self->engineForIsr_) {
-                const StopReason reason = (binding->role == SensorRole::EmergencyStop) ?
-                                              StopReason::EmergencyStop :
-                                              StopReason::LimitSwitch;
-                self->engineForIsr_->haltFromIsr(reason);
+                self->engineForIsr_->haltFromIsr(isrStopReason(binding->role));
         }
 
-        if (binding->role == SensorRole::EmergencyStop) {
+        switch (binding->role) {
+        case SensorRole::EmergencyStop:
                 self->estopLatched_.store(true, std::memory_order_release);
-        } else {
+                break;
+        case SensorRole::Stall:
+                // Count this hit. Task-context service() decides if the
+                // count exceeds the threshold AND we're past the arm
+                // window, only then latching the stall as visible.
+                self->stallHitCounter_.fetch_add(1, std::memory_order_acq_rel);
+                break;
+        case SensorRole::CrashLimit:
+        default:
                 self->crashLatched_.store(true, std::memory_order_release);
+                break;
         }
 }
 
@@ -66,6 +92,7 @@ Status SensorBank::begin(const SensorInputConfig *sensors, uint8_t count,
 
         // First pass: copy configs, validate, configure pins as inputs.
         bool seenHome = false;
+        bool seenStall = false;
         bool anyIsrRole = false;
         for (uint8_t i = 0; i < count; ++i) {
                 const auto &cfg = sensors[i];
@@ -81,12 +108,25 @@ Status SensorBank::begin(const SensorInputConfig *sensors, uint8_t count,
                         }
                         seenHome = true;
                 }
+                if (cfg.role == SensorRole::Stall) {
+                        if (seenStall) {
+                                // Multiple stall inputs share one counter today;
+                                // configuring two would silently lose tuning data.
+                                end();
+                                return Status::Err(ErrorCode::InvalidConfig);
+                        }
+                        seenStall = true;
+                        // Pick up the stall-specific tuning knobs from the first
+                        // (and only) Stall sensor's config.
+                        stallHitsToTrigger_ = cfg.stallHitsToTrigger;
+                        stallArmDelayMs_ = cfg.stallArmDelayMs;
+                }
                 if (isIsrRole(cfg.role)) {
                         anyIsrRole = true;
                         if (!engineForIsr_) {
                                 // ISR-driven sensors need an engine to halt. Asking
-                                // for a CrashLimit without one is a config error,
-                                // not silent fallback to polling.
+                                // for a CrashLimit / Stall without one is a config
+                                // error, not silent fallback to polling.
                                 end();
                                 return Status::Err(ErrorCode::InvalidConfig);
                         }
@@ -171,6 +211,11 @@ void SensorBank::end()
         engineForIsr_ = nullptr;
         crashLatched_.store(false, std::memory_order_release);
         estopLatched_.store(false, std::memory_order_release);
+        stallLatched_.store(false, std::memory_order_release);
+        stallHitCounter_.store(0, std::memory_order_release);
+        stallHitsToTrigger_ = 4;
+        stallArmDelayMs_ = 200;
+        stallArmedAtMs_ = 0;
         begun_ = false;
 }
 
@@ -204,6 +249,34 @@ void SensorBank::service(int64_t nowMs)
                         }
                 }
         }
+
+        // Stall counter / arm-window evaluation. Two states:
+        //   1) Bank not armed (stallArmedAtMs_ == 0): no motion has
+        //      started since the last reset → discard hits.
+        //   2) Inside the arm-delay window: discard hits (StealthChop
+        //      auto-tune is still settling; readings are noise).
+        //   3) Past the arm window: latch stall when count crosses
+        //      threshold. The latch is what `consumeStallActivation()`
+        //      returns.
+        const uint32_t hits = stallHitCounter_.load(std::memory_order_acquire);
+        if (hits > 0) {
+                const bool armed = (stallArmedAtMs_ != 0);
+                const bool pastWindow =
+                        armed && (nowMs - stallArmedAtMs_) >=
+                                         static_cast<int64_t>(stallArmDelayMs_);
+
+                if (!armed || !pastWindow) {
+                        // Discard everything counted so far — they were
+                        // either outside any motion or during the
+                        // auto-tune transient.
+                        stallHitCounter_.store(0, std::memory_order_release);
+                } else if (hits >= stallHitsToTrigger_) {
+                        stallLatched_.store(true, std::memory_order_release);
+                        stallHitCounter_.store(0, std::memory_order_release);
+                }
+                // else: hits below threshold, past arm window — keep
+                // accumulating across service ticks.
+        }
 }
 
 bool SensorBank::isActive(SensorRole role) const
@@ -213,6 +286,9 @@ bool SensorBank::isActive(SensorRole role) const
         }
         if (role == SensorRole::EmergencyStop) {
                 return estopLatched_.load(std::memory_order_acquire);
+        }
+        if (role == SensorRole::Stall) {
+                return stallLatched_.load(std::memory_order_acquire);
         }
         for (uint8_t i = 0; i < slotCount_; ++i) {
                 const Slot &s = slots_[i];
@@ -230,6 +306,9 @@ bool SensorBank::isActive(SensorRole role, Direction direction) const
         }
         if (role == SensorRole::EmergencyStop) {
                 return estopLatched_.load(std::memory_order_acquire);
+        }
+        if (role == SensorRole::Stall) {
+                return stallLatched_.load(std::memory_order_acquire);
         }
         for (uint8_t i = 0; i < slotCount_; ++i) {
                 const Slot &s = slots_[i];
@@ -249,6 +328,22 @@ bool SensorBank::consumeCrashActivation()
 bool SensorBank::consumeEstopActivation()
 {
         return estopLatched_.exchange(false, std::memory_order_acq_rel);
+}
+
+bool SensorBank::consumeStallActivation()
+{
+        return stallLatched_.exchange(false, std::memory_order_acq_rel);
+}
+
+void SensorBank::notifyMotionStart(int64_t nowMs)
+{
+        // Each new motion gets a fresh stall window. Clearing the
+        // counter is intentional: stale hits from a prior motion (e.g.
+        // a deceleration glitch right before stop) must not survive
+        // into the next jog and trip stallHitsToTrigger artificially
+        // early.
+        stallHitCounter_.store(0, std::memory_order_release);
+        stallArmedAtMs_ = nowMs;
 }
 
 uint8_t SensorBank::homePin() const

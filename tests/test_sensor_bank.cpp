@@ -116,6 +116,64 @@ TEST(SensorBankTest, EndDisarmsAndClearsState)
         EXPECT_TRUE(bank.begin(cfgs, 1, &engine).ok());
 }
 
+TEST(SensorBankTest, StallRoleRejectsConfigWithoutEngine)
+{
+        SensorInputConfig cfg;
+        cfg.pin = 26;
+        cfg.role = SensorRole::Stall;
+        cfg.polarity = SensorPolarity::NormallyOpen;
+
+        SensorBank bank;
+        EXPECT_EQ(bank.begin(&cfg, 1, /*engine=*/nullptr).error(),
+                  ungula::motor::ErrorCode::InvalidConfig);
+}
+
+TEST(SensorBankTest, StallRoleAcceptsValidConfig)
+{
+        SensorInputConfig cfg;
+        cfg.pin = 26;
+        cfg.role = SensorRole::Stall;
+        cfg.polarity = SensorPolarity::NormallyOpen;
+        cfg.stallHitsToTrigger = 4;
+        cfg.stallArmDelayMs = 200;
+
+        FakePulseEngine engine;
+        SensorBank bank;
+        ASSERT_TRUE(bank.begin(&cfg, 1, &engine).ok());
+        EXPECT_FALSE(bank.isActive(SensorRole::Stall));
+        EXPECT_FALSE(bank.consumeStallActivation());
+}
+
+TEST(SensorBankTest, NotifyMotionStartDoesNotCrash)
+{
+        SensorInputConfig cfg;
+        cfg.pin = 26;
+        cfg.role = SensorRole::Stall;
+        cfg.polarity = SensorPolarity::NormallyOpen;
+
+        FakePulseEngine engine;
+        SensorBank bank;
+        ASSERT_TRUE(bank.begin(&cfg, 1, &engine).ok());
+
+        bank.notifyMotionStart(0);
+        bank.service(100);
+        bank.service(500);
+        // No DIAG hits arrived — counter never accumulates → no latch.
+        EXPECT_FALSE(bank.consumeStallActivation());
+}
+
+TEST(SensorBankTest, DuplicateStallSensorsRejected)
+{
+        SensorInputConfig cfgs[2];
+        cfgs[0].pin = 26; cfgs[0].role = SensorRole::Stall;
+        cfgs[1].pin = 27; cfgs[1].role = SensorRole::Stall;
+
+        FakePulseEngine engine;
+        SensorBank bank;
+        EXPECT_EQ(bank.begin(cfgs, 2, &engine).error(),
+                  ungula::motor::ErrorCode::InvalidConfig);
+}
+
 TEST(SensorBankTest, ServiceDoesNotCrashOnPolledSensors)
 {
         SensorInputConfig cfgs[2];

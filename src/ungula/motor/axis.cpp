@@ -305,6 +305,11 @@ Status Axis::armAndStart(const PlannedMove &move, AxisState onStart)
         lastStopReason_ = StopReason::None;
         lastMoveDirection_ = move.direction;
         motionInFlight_ = true;
+        // Arm the stall-detection window so the SensorBank discards
+        // DIAG hits during the StealthChop auto-tune transient.
+        sensors_.notifyMotionStart(lastServiceMs_ != 0
+                                       ? lastServiceMs_
+                                       : ungula::core::time::millis());
         emitEvent(AxisEventType::MotionStarted);
         emitEvent(AxisEventType::StateChanged);
         return Status::Ok();
@@ -647,6 +652,17 @@ void Axis::pumpSensors(int64_t nowMs)
                           FaultCode::LimitExceeded);
                 emitEvent(AxisEventType::StateChanged);
         }
+        if (sensors_.consumeStallActivation()) {
+                // Stall is its own reason / fault code. Distinguishes a
+                // TMC2209 DIAG-pin event from a generic limit switch.
+                motionInFlight_ = false;
+                state_ = AxisState::Faulted;
+                lastStopReason_ = StopReason::StallDetected;
+                emitEvent(AxisEventType::LimitActivated, StopReason::StallDetected);
+                emitEvent(AxisEventType::FaultRaised, StopReason::StallDetected,
+                          FaultCode::Stall);
+                emitEvent(AxisEventType::StateChanged);
+        }
 
         // Travel-limit handling: if a limit in the current move's
         // direction is active, halt immediately. The Axis service tick
@@ -776,6 +792,9 @@ Status Axis::commandMove(Distance deltaSteps, Velocity feedSps)
 
         lastMoveDirection_ = move.direction;
         motionInFlight_ = true;
+        sensors_.notifyMotionStart(lastServiceMs_ != 0
+                                       ? lastServiceMs_
+                                       : ungula::core::time::millis());
         emitEvent(AxisEventType::MotionStarted);
         return Status::Ok();
 }
@@ -801,6 +820,9 @@ Status Axis::commandJog(Direction direction, Velocity feedSps)
 
         lastMoveDirection_ = direction;
         motionInFlight_ = true;
+        sensors_.notifyMotionStart(lastServiceMs_ != 0
+                                       ? lastServiceMs_
+                                       : ungula::core::time::millis());
         emitEvent(AxisEventType::MotionStarted);
         return Status::Ok();
 }
