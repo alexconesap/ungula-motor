@@ -52,10 +52,11 @@ struct StepDirStepperAxisConfig {
 
         bool dirActiveHigh = true; // common convention; flip per drive
         bool enableActiveLow = true; // most stepper drivers are active-LOW EN
-        uint32_t dirSetupUs = 5; // hold DIR stable before STEP rising edge
+        uint32_t dirSetupUs = 5; // time in us to hold DIR stable before STEP rising edge
 
-        SensorInputConfig sensors[MAX_SENSOR_INPUTS]{};
-        uint8_t sensorCount = 0;
+        SensorInputConfig sensors
+            [MAX_SENSOR_INPUTS]{}; // optional limit switches, stall input, etc. See `SensorRole` for valid roles.
+        uint8_t sensorCount = 0; // number of valid entries in `sensors[]`
 };
 
 /// STEP/DIR servo axis. Same pulse stream as a stepper but the drive
@@ -73,8 +74,8 @@ struct StepDirServoAxisConfig {
         bool dirActiveHigh = true;
         bool enableActiveLow = false; // industrial servos usually active-HIGH (SRV-ON)
         bool alarmActiveLow = true; // industrial servos: ALM is open-collector, LOW = fault
-        bool inPositionActiveHigh = true;
-        uint32_t dirSetupUs = 5;
+        bool inPositionActiveHigh = true; // servos INP/COIN is open-collector, HIGH=in-position
+        uint32_t dirSetupUs = 5; // time in us to hold DIR stable before STEP rising edge
 
         SensorInputConfig sensors[MAX_SENSOR_INPUTS]{};
         uint8_t sensorCount = 0;
@@ -89,7 +90,7 @@ struct CanServoAxisConfig {
         /// Conversion factor from drive encoder counts to user steps. For
         /// CAN servos the planner still works in "steps"; this scales the
         /// drive's native units to that domain.
-        float unitsPerEncoderCount = 1.0f;
+        float unitsPerEncoderCount = 1.0f; // e.g. 10.0f for 10 steps per encoder count
 };
 
 } // namespace ungula::motor
