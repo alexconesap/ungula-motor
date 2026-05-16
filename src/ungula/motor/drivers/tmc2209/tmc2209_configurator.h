@@ -55,11 +55,11 @@ enum class Microsteps : uint8_t {
 ///
 /// ## Failure semantics
 ///
-/// Every method returns `Status`. Failures from the underlying
-/// transport propagate as `ErrorCode::TransportError`; invalid
-/// parameter values surface as `InvalidConfig`. The configurator
-/// makes NO attempt to recover or retry — that's the host's policy
-/// decision.
+/// Configuration methods return `Status`; identity reads return
+/// `Result<DriverIdentity>`. Failures from the underlying transport
+/// propagate as `ErrorCode::TransportError`; invalid parameter values
+/// surface as `InvalidConfig`. The configurator makes NO attempt to
+/// recover or retry — that's the host's policy decision.
 class Tmc2209Configurator : public IDriverIdentityProvider {
     public:
         struct Config {
@@ -172,7 +172,14 @@ class Tmc2209Configurator : public IDriverIdentityProvider {
         /// per the TMC2209 datasheet — production silicon reports 0x21).
         /// Returns vendor="Trinamic", model="TMC2209", firmwareMajor =
         /// version byte, firmwareMinor=0, rawId = full IOIN word.
-        Result<DriverIdentity> readIdentity() override;
+        ///
+        /// Identity is intrinsic to the driver class: every TMC2209 host
+        /// can answer "what chip is this?" via this method directly,
+        /// without going through the axis. The axis's universal
+        /// `readDriverIdentity()` delegates here when the kit (or a
+        /// compose-by-hand host) wires this configurator as the
+        /// `IDriverIdentityProvider` on the actuator config.
+        Result<DriverIdentity> readDriverIdentity() override;
 
         // ---- Cached state inspection -------------------------------------
         //

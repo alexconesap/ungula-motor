@@ -205,6 +205,20 @@ class Axis : public IHomingAxis {
         Status clearFault();
         FaultStatus faultStatus() const;
 
+        // --- Driver identity ---------------------------------------------
+
+        /// Universal "what's on the other end?" query. Delegates to the
+        /// actuator, which in turn delegates to a chip-specific
+        /// `IDriverIdentityProvider` if one was wired (kits wire it
+        /// automatically). Returns `ErrorCode::Unsupported` only when no
+        /// provider was wired (compose-by-hand omission). Returns
+        /// `ErrorCode::TransportError` if the read failed (UART / CAN
+        /// wiring or slave-address problem).
+        ///
+        /// May block on UART / CAN traffic. NOT for the motion-timing
+        /// path — call from setup() or a diagnostics task.
+        Result<DriverIdentity> readDriverIdentity();
+
         // --- Queries -----------------------------------------------------
 
         AxisState state() const;

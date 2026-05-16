@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include "ungula/motor/axis_types.h"
+#include "ungula/motor/drivers/driver_identity.h"
 #include "ungula/motor/limits/sensor_input.h"
 
 namespace ungula::motor
@@ -72,6 +73,15 @@ struct StepDirStepperAxisConfig {
         SensorInputConfig sensors
             [MAX_SENSOR_INPUTS]{}; // optional limit switches, stall input, etc. See `SensorRole` for valid roles.
         uint8_t sensorCount = 0; // number of valid entries in `sensors[]`
+
+        /// Optional driver-identity provider (chip-specific object that
+        /// can answer "what's on the other end of the STEP/DIR wires?").
+        /// When set, `Axis::readDriverIdentity()` works; when null,
+        /// `readDriverIdentity()` returns `Unsupported`. Kits wire this
+        /// automatically. Compose-by-hand hosts can pass any object
+        /// that implements `IDriverIdentityProvider`. Lifetime must
+        /// outlive the Axis.
+        IDriverIdentityProvider *identityProvider = nullptr;
 };
 
 /// STEP/DIR servo axis. Same pulse stream as a stepper but the drive
@@ -105,6 +115,10 @@ struct StepDirServoAxisConfig {
 
         SensorInputConfig sensors[MAX_SENSOR_INPUTS]{};
         uint8_t sensorCount = 0;
+
+        /// Optional driver-identity provider. See the matching field on
+        /// `StepDirStepperAxisConfig` for full doc — same semantics.
+        IDriverIdentityProvider *identityProvider = nullptr;
 };
 
 /// CAN servo axis. No STEP/DIR pins at all.

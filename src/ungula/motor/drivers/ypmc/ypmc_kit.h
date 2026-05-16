@@ -9,6 +9,7 @@
 
 #include "ungula/motor/axis.h"
 #include "ungula/motor/axis_config.h"
+#include "ungula/motor/drivers/driver_identity.h"
 #include "ungula/motor/drivers/ypmc/ypmc_servo.h"
 #include "ungula/motor/result.h"
 
@@ -94,6 +95,12 @@ class YpmcServoKit {
         /// Members destruct in reverse declaration order — `axis`
         /// goes first, then `brake`. Null when `useBrake == false`.
         std::unique_ptr<BrakeController> brake;
+        /// Hardcoded driver identity for the YPMC + S2SVD15 pairing.
+        /// The S2SVD15 has no identity register over plain STEP/DIR,
+        /// so the kit answers with compile-time-known vendor/model.
+        /// Declared BEFORE `axis` for the same lifetime reason as
+        /// `brake` (axis holds a raw `IDriverIdentityProvider*`).
+        std::unique_ptr<StaticDriverIdentity> identity;
         std::unique_ptr<Axis> axis;
 
         ServoKitConfig storedCfg{};

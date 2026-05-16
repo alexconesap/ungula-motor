@@ -115,6 +115,16 @@ class StepDirActuator final : public IAxisActuator {
                 /// code change later.
                 bool hasAlarmInput = false;
                 bool hasInPositionInput = false;
+
+                /// Optional driver-identity hook. When non-null, the
+                /// actuator's `readDriverIdentity()` delegates here; when
+                /// null, it returns `Unsupported`. The provider's lifetime
+                /// must outlive the actuator — in the kit pattern the
+                /// configurator (which implements the provider) is owned
+                /// by the kit alongside the actuator with the right
+                /// destruction order. Pure pointer (not unique_ptr) so
+                /// compose-by-hand hosts can wire any existing object.
+                IDriverIdentityProvider *identityProvider = nullptr;
         };
 
         /// `engine` must outlive the actuator. Axis composes both and
@@ -142,6 +152,8 @@ class StepDirActuator final : public IAxisActuator {
 
         FaultStatus faultStatus() const override;
         Status clearFault() override;
+
+        Result<DriverIdentity> readDriverIdentity() override;
 
     private:
         IPulseEngine &engine_;

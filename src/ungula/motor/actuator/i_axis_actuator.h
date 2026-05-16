@@ -7,6 +7,7 @@
 #include "ungula/motor/result.h"
 #include "ungula/motor/axis_types.h"
 #include "ungula/motor/axis_state.h"
+#include "ungula/motor/drivers/driver_identity.h"
 #include "ungula/motor/planning/planned_move.h"
 #include "ungula/motor/actuator/actuator_capabilities.h"
 
@@ -55,6 +56,21 @@ class IAxisActuator {
         /// Latched fault state. Cleared via `clearFault()`.
         virtual FaultStatus faultStatus() const = 0;
         virtual Status clearFault() = 0;
+
+        /// Read driver identity (vendor / model / firmware version).
+        /// Default implementation returns `Unsupported` so concrete
+        /// actuators only override when they actually have a way to
+        /// surface identity (typically by being constructed with an
+        /// `IDriverIdentityProvider*`). NOT pure virtual on purpose —
+        /// most actuators have no identity source and should not be
+        /// forced to write boilerplate.
+        ///
+        /// May block on UART / CAN traffic. NOT for the motion-timing
+        /// path — host calls from setup() or a diagnostics task.
+        virtual Result<DriverIdentity> readDriverIdentity()
+        {
+                return Result<DriverIdentity>::Err(ErrorCode::Unsupported);
+        }
 };
 
 } // namespace ungula::motor

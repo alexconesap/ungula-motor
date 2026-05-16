@@ -252,4 +252,16 @@ Status StepDirActuator::clearFault()
         return engine_.clearFault();
 }
 
+Result<DriverIdentity> StepDirActuator::readDriverIdentity()
+{
+        // Generic STEP/DIR actuator: identity is only available when
+        // the host (or kit) wired a chip-specific provider into the
+        // Config. Without one, the actuator has no way to know what
+        // is on the other end of the STEP/DIR wires (A4988? TMC2209?
+        // YPMC?), so the honest answer is Unsupported.
+        if (!cfg_.identityProvider)
+                return Result<DriverIdentity>::Err(ErrorCode::Unsupported);
+        return cfg_.identityProvider->readDriverIdentity();
+}
+
 } // namespace ungula::motor

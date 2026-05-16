@@ -102,6 +102,7 @@ Result<std::unique_ptr<Axis>> Axis::createStepDirStepper(const StepDirStepperAxi
         aCfg.secondaryEnableActiveLow = cfg.secondaryEnableActiveLow;
         aCfg.hasAlarmInput = false;
         aCfg.hasInPositionInput = false;
+        aCfg.identityProvider = cfg.identityProvider;
         auto actuator = std::make_unique<StepDirActuator>(*engine, aCfg);
 
         std::unique_ptr<Axis> axis(new Axis());
@@ -145,6 +146,7 @@ Result<std::unique_ptr<Axis>> Axis::createStepDirServo(const StepDirServoAxisCon
         aCfg.secondaryEnableActiveLow = cfg.secondaryEnableActiveLow;
         aCfg.hasAlarmInput = isPinSet(cfg.alarmInputPin.value);
         aCfg.hasInPositionInput = isPinSet(cfg.inPositionInputPin.value);
+        aCfg.identityProvider = cfg.identityProvider;
         auto actuator = std::make_unique<StepDirActuator>(*engine, aCfg);
 
         std::unique_ptr<Axis> axis(new Axis());
@@ -696,6 +698,13 @@ FaultStatus Axis::faultStatus() const
         if (!actuator_)
                 return {};
         return actuator_->faultStatus();
+}
+
+Result<DriverIdentity> Axis::readDriverIdentity()
+{
+        if (!actuator_)
+                return Result<DriverIdentity>::Err(ErrorCode::NotInitialized);
+        return actuator_->readDriverIdentity();
 }
 
 // =====================================================================

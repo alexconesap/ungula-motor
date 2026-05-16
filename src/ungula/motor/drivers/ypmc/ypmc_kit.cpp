@@ -79,6 +79,15 @@ Result<std::unique_ptr<YpmcServoKit>> makeServoKit(const ServoKitConfig &cfg)
         if (const auto bs = buildAxisConfig(cfg, axisCfg); !bs.ok()) {
                 return Result<std::unique_ptr<YpmcServoKit>>::Err(bs.error());
         }
+        // S2SVD15 exposes no identity register over plain STEP/DIR, so
+        // the kit answers with hardcoded compile-time identity. String
+        // literals have static lifetime — safe for the
+        // `StaticDriverIdentity` to hold by pointer.
+        auto identity = std::make_unique<StaticDriverIdentity>(
+            "RATTMOTOR", "YPMC + S2SVD15", /*firmwareMajor=*/0,
+            /*firmwareMinor=*/0, /*rawId=*/0);
+        axisCfg.identityProvider = identity.get();
+
         auto axisRes = Axis::createStepDirServo(axisCfg);
         if (!axisRes.ok()) {
                 return Result<std::unique_ptr<YpmcServoKit>>::Err(axisRes.error());
@@ -92,6 +101,7 @@ Result<std::unique_ptr<YpmcServoKit>> makeServoKit(const ServoKitConfig &cfg)
         auto kit = std::make_unique<YpmcServoKit>();
         kit->axis = axisRes.takeValue();
         kit->brake = std::move(brake);
+        kit->identity = std::move(identity);
         kit->storedCfg = cfg;
         return Result<std::unique_ptr<YpmcServoKit>>::Ok(std::move(kit));
 }

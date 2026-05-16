@@ -135,6 +135,62 @@ Conventions:
 See `drivers/tmc2209/tmc2209_kit.{h,cpp}` and
 `drivers/ypmc/ypmc_kit.{h,cpp}` for reference implementations.
 
+### 8b) Identity is INTRINSIC to the driver class
+
+**Every motor driver has an identity, even if hardcoded.** Identity is
+not a separate concern, not a side helper, and not kit-only — it is a
+property of the driver class itself. The rule:
+
+- **The driver class (configurator or equivalent) implements
+  `IDriverIdentityProvider` directly.** No separate provider class.
+- **For drives with a chip-side identity register** (TMC2209's IOIN,
+  CiA-402's `0x1018` Identity Object), the override reads the register
+  and fills the struct.
+- **For drives without an identity register** (industrial servos over
+  plain STEP/DIR, open-loop steppers driven from a pin-only carrier),
+  the kit constructs a `StaticDriverIdentity` from
+  `drivers/driver_identity.h` with hardcoded vendor/model.
+- **`Unsupported`** is reserved for the genuinely-unknown case: a
+  compose-by-hand host that built an actuator but did not wire any
+  provider. Even then it's a host omission, not a "the lib has no
+  answer".
+
+Pattern A — driver with identity register (see
+`drivers/tmc2209/tmc2209_configurator.{h,cpp}`):
+
+```cpp
+class <Vendor>Configurator : public IDriverIdentityProvider {
+public:
+    Status begin(const Config& cfg);
+    // ... other config methods ...
+    Result<DriverIdentity> readDriverIdentity() override;  // reads chip
+};
+```
+
+Pattern B — driver without identity register (see
+`drivers/ypmc/ypmc_kit.cpp`):
+
+```cpp
+// In the kit factory:
+auto identity = std::make_unique<StaticDriverIdentity>(
+    "Vendor", "Model + Drive", /*fwMajor=*/0, /*fwMinor=*/0);
+axisCfg.identityProvider = identity.get();
+```
+
+Return:
+
+- `vendor` / `model` as compile-time `const char*` string literals.
+- `firmwareMajor` / `firmwareMinor` as numeric bytes (use only `Major`
+  if the chip exposes a single version byte; both 0 for hardcoded).
+- `rawId` as the full raw identity register (0 for hardcoded).
+
+The kit owns the driver / static-identity object in a `unique_ptr`
+member declared BEFORE `axis` (so it outlives the axis's raw pointer
+to it), and wires `cfg.identityProvider = configurator.get()` (or
+`identity.get()` for static) into the axis config. Compose-by-hand
+hosts can do the same one-liner — or just call
+`configurator.readDriverIdentity()` directly. Same answer either way.
+
 ## 9) Test requirements (host side)
 
 Add tests under `tests/` for all new behavior.

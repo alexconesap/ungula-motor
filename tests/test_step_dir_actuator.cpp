@@ -282,4 +282,74 @@ TEST(StepDirActuatorTest, SecondaryEnableUnsetLeavesBehaviourUnchanged)
         EXPECT_TRUE(actuator.disable().ok());
 }
 
+// =====================================================================
+// readDriverIdentity — delegates to the configured provider
+// =====================================================================
+
+namespace
+{
+class FakeIdentityProvider final : public IDriverIdentityProvider {
+    public:
+        Result<DriverIdentity> readDriverIdentity() override
+        {
+                callCount++;
+                if (failNext) {
+                        failNext = false;
+                        return Result<DriverIdentity>::Err(ErrorCode::TransportError);
+                }
+                DriverIdentity id;
+                id.vendor = "TestVendor";
+                id.model = "TestModel";
+                id.firmwareMajor = 0x42;
+                id.firmwareMinor = 7;
+                id.rawId = 0xDEADBEEFu;
+                return Result<DriverIdentity>::Ok(id);
+        }
+        uint32_t callCount = 0;
+        bool failNext = false;
+};
+} // namespace
+
+TEST(StepDirActuatorTest, ReadIdentityReturnsUnsupportedWithoutProvider)
+{
+        FakePulseEngine engine;
+        StepDirActuator::Config c = makeCfg();
+        // identityProvider defaults to nullptr.
+        StepDirActuator actuator(engine, c);
+        auto r = actuator.readDriverIdentity();
+        EXPECT_FALSE(r.ok());
+        EXPECT_EQ(r.error(), ErrorCode::Unsupported);
+}
+
+TEST(StepDirActuatorTest, ReadIdentityForwardsToProvider)
+{
+        FakePulseEngine engine;
+        StepDirActuator::Config c = makeCfg();
+        FakeIdentityProvider provider;
+        c.identityProvider = &provider;
+        StepDirActuator actuator(engine, c);
+        auto r = actuator.readDriverIdentity();
+        ASSERT_TRUE(r.ok());
+        const auto id = r.takeValue();
+        EXPECT_STREQ(id.vendor, "TestVendor");
+        EXPECT_STREQ(id.model, "TestModel");
+        EXPECT_EQ(id.firmwareMajor, 0x42u);
+        EXPECT_EQ(id.firmwareMinor, 7u);
+        EXPECT_EQ(id.rawId, 0xDEADBEEFu);
+        EXPECT_EQ(provider.callCount, 1u);
+}
+
+TEST(StepDirActuatorTest, ReadIdentityPropagatesProviderError)
+{
+        FakePulseEngine engine;
+        StepDirActuator::Config c = makeCfg();
+        FakeIdentityProvider provider;
+        provider.failNext = true;
+        c.identityProvider = &provider;
+        StepDirActuator actuator(engine, c);
+        auto r = actuator.readDriverIdentity();
+        EXPECT_FALSE(r.ok());
+        EXPECT_EQ(r.error(), ErrorCode::TransportError);
+}
+
 } // namespace

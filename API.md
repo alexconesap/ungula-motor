@@ -17,6 +17,48 @@ returns `Unsupported` rather than degrading to `Immediate`.
 
 ---
 
+## LLM quick map
+
+- **Primary include**: `#include <ungula/motor.h>`.
+- **Arduino discovery include**: `#include <ungula_motor.h>` (forwarder only; host code should keep using the real header).
+- **Namespace root**: `ungula::motor`.
+- **Language baseline**: C++17 minimum (examples avoid post-C++17 requirements).
+- **Supported architectures**: `esp32`.
+- **Read order for coding agents**: `Usage` (working patterns) -> `API` (symbols/signatures) -> `Lifecycle`/`Error handling`/`Threading` notes in this file.
+
+### Use-case index
+
+- [Use case: open-loop stepper](#use-case-open-loop-stepper)
+- [Use case: STEP/DIR servo](#use-case-stepdir-servo)
+- [Use case: CAN servo (skeleton in 3.0.0)](#use-case-can-servo-skeleton-in-300)
+- [Use case: composing manually (tests, custom backends)](#use-case-composing-manually-tests-custom-backends)
+- [Use case: configure in mm/s and rpm](#use-case-configure-in-mms-and-rpm)
+- [Use case: built-in `AutoDisable`](#use-case-built-in-autodisable)
+- [Use case: equivalent custom listener (`AutoDisableOnIdle`)](#use-case-equivalent-custom-listener-autodisableonidle)
+- [Use case: plan-by-hand (advanced)](#use-case-plan-by-hand-advanced)
+- [Use case: building a production engine by hand](#use-case-building-a-production-engine-by-hand)
+- [Use case: ISR-context immediate halt](#use-case-isr-context-immediate-halt)
+- [Use case: a home reference + a hardware E-stop](#use-case-a-home-reference-a-hardware-e-stop)
+- [Use case: querying sensor state](#use-case-querying-sensor-state)
+- [Use case: limit-switch homing](#use-case-limit-switch-homing)
+- [Use case: stall-based homing (sensorless)](#use-case-stall-based-homing-sensorless)
+- [Use case: writing a custom strategy](#use-case-writing-a-custom-strategy)
+- [Use case: subscribing a listener](#use-case-subscribing-a-listener)
+- [Use case: boot configuration (mA-based currents)](#use-case-boot-configuration-ma-based-currents)
+- [Use case: opt-in diagnostics from a low-priority task](#use-case-opt-in-diagnostics-from-a-low-priority-task)
+- [Use case: stall detection via DIAG pin](#use-case-stall-detection-via-diag-pin)
+- [Use case: CoolStep (load-based dynamic current)](#use-case-coolstep-load-based-dynamic-current)
+- [Use case: bring-up](#use-case-bring-up)
+- [Use case: full lifecycle](#use-case-full-lifecycle)
+
+### LLM rules
+
+- Use only symbols and include paths documented in this file; do not infer extra public API from implementation files.
+- Prefer the use-case patterns here over ad-hoc rewrites; keep dependency wiring and lifecycle order identical unless the task explicitly changes API design.
+- Treat headers under `detail/`, `platform/`, and `platforms/` as internal unless this document calls them out as public.
+- If required behavior is missing from the documented API, report the gap explicitly instead of inventing new public symbols.
+
+
 ## Headers
 
 ### Umbrella
@@ -468,7 +510,7 @@ L.decelSpsPerSec = 8000;
 L.maxStepRateSps = 200000;
 
 const auto move = planner.planBy(/*deltaSteps=*/1000, L,
-                                  /*resolutionHz=*/1'000'000,
+                                  /*resolutionHz=*/1000000,
                                   /*minHalfPeriodTicks=*/5);
 
 // move.totalSteps == 1000 (exact — the planner rebalances rounding
@@ -521,7 +563,7 @@ eCfg.stepPin           = 18;
 eCfg.dirPin            = 19;
 eCfg.dirActiveHigh     = true;
 eCfg.dirSetupUs        = 5;
-eCfg.timerResolutionHz = 1'000'000;
+eCfg.timerResolutionHz = 1000000;
 eCfg.timerMinTicks     = 5;
 
 HalPulseEngine engine(*timer, eCfg);
@@ -562,6 +604,41 @@ Application code typically doesn't call this directly — the SensorBank handles
 | `clearFault()` | Task | Returns `MotionInProgress` if running |
 
 ---
+
+## Driver identity
+
+**Identity is intrinsic to the driver class.** Every motor driver carries identity — vendor, model, firmware version (when readable), and a raw identity word. For chips with an identity register (TMC2209), the driver class reads it. For drives without (YPMC + S2SVD15 over STEP/DIR), the kit provides hardcoded compile-time identity. `Unsupported` is reserved for the case where a compose-by-hand host genuinely did not wire any identity source.
+
+```cpp
+#include <ungula/motor/drivers/driver_identity.h>
+
+// Path A — universal, drive-family-agnostic call:
+if (auto r = axis->readDriverIdentity(); r.ok()) {
+    const auto id = r.takeValue();
+    log("vendor=%s model=%s fw=0x%02x.%u raw=0x%08lx",
+        id.vendor, id.model,
+        id.firmwareMajor, id.firmwareMinor,
+        static_cast<unsigned long>(id.rawId));
+}
+
+// Path B — chip-config-time call, no axis required yet:
+tmc2209::Tmc2209Configurator tmcConfig(tmcTransport);
+tmcConfig.begin(...);
+auto id = tmcConfig.readDriverIdentity();  // works directly
+```
+
+`vendor` and `model` are static rodata (compile-time string literals owned by the driver source); the caller may copy them but must not free them. Firmware version is split into two numeric bytes so drivers don't need runtime string buffers — for chips that expose a single version byte (e.g. TMC2209 IOIN[31:24] = 0x21), the byte goes in `firmwareMajor` and `firmwareMinor` is 0. `rawId` carries the full underlying identity register / CAN object for debugging.
+
+Wiring:
+
+- **Kits**: the kit wires the driver class (or a `StaticDriverIdentity` for drives without a register) into the axis config automatically. Just call `kit->axis->readDriverIdentity()`. For TMC2209 you can also reach the same answer via `kit->configurator->readDriverIdentity()`.
+- **Compose-by-hand TMC2209**: the configurator IS the provider. One-liner: `cfg.identityProvider = &tmcConfig;` before `Axis::createStepDirStepper(cfg)`. The configurator's lifetime must outlive the axis.
+- **Compose-by-hand with hardcoded identity**: instantiate `StaticDriverIdentity{"Vendor", "Model"}` (from `drivers/driver_identity.h`) and wire its address as `cfg.identityProvider`.
+- **No provider wired**: `readDriverIdentity()` returns `ErrorCode::Unsupported`. This is the honest "the host did not say what's on the wires" answer — not a normal case for kit users.
+
+The actuator and axis layers are pure passthrough: `Axis::readDriverIdentity()` delegates to the actuator, the actuator delegates to whatever `IDriverIdentityProvider*` is wired in its config. The implementation lives once, on the driver class.
+
+May block on UART / CAN (for register-reading providers). `StaticDriverIdentity::readDriverIdentity()` is free of side effects. Don't call any of them from the motion-timing path — use them at boot, after a reconfiguration, or from a diagnostics task.
 
 ## Actuators
 
@@ -1100,6 +1177,11 @@ m1->begin(); m2->begin();
 explicit parameter wins. The kit does NOT own a shared UART; the
 host must keep it alive at least as long as every kit using it.
 
+Ownership note: keep `axis` owned by the kit (`kit->axis`). Do not
+move it out (`std::move(kit->axis)`) because kit-owned helpers
+(`configurator`, static identity providers, optional brake listeners)
+are part of the axis wiring contract.
+
 ### YPMC + S2SVD15 — `ypmc::YpmcServoKit`
 
 Header: `ungula/motor/drivers/ypmc/ypmc_kit.h`.
@@ -1123,6 +1205,10 @@ delay(60);
 kit->brake->release();
 kit->axis->moveBy(10000);
 ```
+
+The YPMC kit wires a `StaticDriverIdentity` by default, so
+`kit->axis->readDriverIdentity()` returns `Ok` with
+`vendor="RATTMOTOR"` and `model="YPMC + S2SVD15"`.
 
 ### Tandem STEP/DIR
 
@@ -1236,7 +1322,7 @@ struct DriveTiming {
     uint32_t dirSetupUs       = 10;       // 5 µs spec; 10 µs default
     uint32_t minPulseHighUs   = 3;        // 1 µs spec; 3 µs default
     uint32_t minPulseLowUs    = 3;
-    uint32_t maxStepRateSps   = 500'000;  // S2SVD15 CMD+DIR ceiling
+    uint32_t maxStepRateSps   = 500000;  // S2SVD15 CMD+DIR ceiling
 };
 
 struct DrivePolarity {
@@ -1274,9 +1360,9 @@ namespace ypmc = ungula::motor::ypmc;
 StepDirServoAxisConfig cfg;
 cfg.common.axisId = AxisId(0);
 cfg.common.units.stepsPerMm = 1000.0f;
-cfg.common.limits.maxVelocitySps = 200'000;
-cfg.common.limits.accelSpsPerSec = 800'000;
-cfg.common.limits.decelSpsPerSec = 800'000;
+cfg.common.limits.maxVelocitySps = 200000;
+cfg.common.limits.accelSpsPerSec = 800000;
+cfg.common.limits.decelSpsPerSec = 800000;
 cfg.stepPin            = StepPin{ 18 };
 cfg.dirPin             = DirectionPin{ 19 };
 cfg.enablePin          = EnablePin{ 21 };

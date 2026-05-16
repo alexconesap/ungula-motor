@@ -81,4 +81,30 @@ TEST(YpmcKitTest, TandemFieldsPropagateToStoredCfg)
         EXPECT_FALSE(kit->storedCfg.secondaryEnableActiveLow);
 }
 
+// =====================================================================
+// Hardcoded identity — the S2SVD15 has no identity register, but the
+// kit answers with compile-time vendor/model so the universal API
+// `axis->readDriverIdentity()` never returns Unsupported.
+// =====================================================================
+
+TEST(YpmcKitTest, KitProvidesHardcodedIdentity)
+{
+        auto cfg = makeBaseCfg();
+        auto r = makeServoKit(cfg);
+        ASSERT_TRUE(r.ok());
+        auto kit = r.takeValue();
+        ASSERT_NE(kit, nullptr);
+        ASSERT_NE(kit->identity, nullptr) << "kit must wire a static identity";
+
+        auto idr = kit->axis->readDriverIdentity();
+        ASSERT_TRUE(idr.ok())
+                << "YPMC kit must return Ok identity, never Unsupported";
+        const auto id = idr.takeValue();
+        EXPECT_STREQ(id.vendor, "RATTMOTOR");
+        EXPECT_STREQ(id.model, "YPMC + S2SVD15");
+        EXPECT_EQ(id.firmwareMajor, 0u);
+        EXPECT_EQ(id.firmwareMinor, 0u);
+        EXPECT_EQ(id.rawId, 0u);
+}
+
 } // namespace

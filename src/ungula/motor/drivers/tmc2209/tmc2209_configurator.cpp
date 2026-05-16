@@ -206,4 +206,22 @@ Status Tmc2209Configurator::clearGstat()
         return uart_.writeRegister(reg::GSTAT, gstat::ALL_FLAGS);
 }
 
+Result<DriverIdentity> Tmc2209Configurator::readDriverIdentity()
+{
+        auto ioin = uart_.readRegister(reg::IOIN);
+        if (!ioin.ok()) {
+                return Result<DriverIdentity>::Err(ioin.error());
+        }
+        const uint32_t raw = ioin.takeValue();
+        DriverIdentity id;
+        // Compile-time string literals — lifetime is forever, safe to
+        // hand out as const char*.
+        id.vendor = "Trinamic";
+        id.model = "TMC2209";
+        id.firmwareMajor = static_cast<uint8_t>((raw >> 24) & 0xFFu);
+        id.firmwareMinor = 0; // single-byte version on this chip
+        id.rawId = raw;
+        return Result<DriverIdentity>::Ok(id);
+}
+
 } // namespace ungula::motor::tmc2209

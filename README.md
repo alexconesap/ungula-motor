@@ -1,6 +1,8 @@
 # UngulaMotor
 
-> **Embedded C++20 motion control for ESP32 and STM32 (via lib_hal).** Open-loop steppers, STEP/DIR servos, and CAN servos behind a single `Axis` facade.
+> **Embedded C++17 motion control for ESP32 and STM32 (via lib_hal).** Open-loop steppers, STEP/DIR servos, and CAN servos behind a single `Axis` facade.
+
+> **LLM usage note:** if this library is consumed from a coding AI workflow, explicitly point the agent to `API.md` first. `API.md` is the LLM-facing contract (public API + examples + constraints) and avoids wasting time/tokens scanning source files and this human-oriented README.
 
 The library is built around one rule:
 
@@ -8,29 +10,42 @@ The library is built around one rule:
 
 Pulse generation lives inside a hardware-timer ISR. Everything else — the main loop, UART register reads to a TMC2209, event listeners, CAN traffic, logging — runs in task context and observes the engine, never commands its timing.
 
-## Table of contents
+## Table of Contents
 
 - [Features](#features)
 - [Supported drives](#supported-drives)
 - [Dependencies](#dependencies)
+  - [Include reference](#include-reference)
 - [Architecture](#architecture)
-- [Quick start — open-loop stepper (TMC2209)](#quick-start--open-loop-stepper-tmc2209)
-- [Quick start — STEP/DIR servo](#quick-start--stepdir-servo)
-- [Quick start — RATTMOTOR YPMC servo + brake](#quick-start--rattmotor-ypmc-servo--brake)
-- [Quick start — limit-switch homing](#quick-start--limit-switch-homing)
+- [Quick start — TMC2209 kit (recommended)](#quick-start-tmc2209-kit-recommended)
+  - [Two TMC2209s on one UART](#two-tmc2209s-on-one-uart)
+- [Quick start — TMC2209 by hand (advanced)](#quick-start-tmc2209-by-hand-advanced)
+- [Quick start — STEP/DIR servo](#quick-start-stepdir-servo)
+- [Quick start — RATTMOTOR YPMC servo + brake](#quick-start-rattmotor-ypmc-servo-brake)
+  - [YPMC kit shortcut](#ypmc-kit-shortcut)
+  - [Tandem YPMCs on one STEP pin](#tandem-ypmcs-on-one-step-pin)
+- [Driver identity (`readDriverIdentity`)](#driver-identity-readdriveridentity)
+- [Quick start — limit-switch homing](#quick-start-limit-switch-homing)
+  - [Tiered limit switches (home + travel + E-stop on both ends)](#tiered-limit-switches-home-travel-e-stop-on-both-ends)
 - [Speed and acceleration in user units](#speed-and-acceleration-in-user-units)
 - [Live trajectory tuning](#live-trajectory-tuning)
 - [Idle policy and the `AutoDisableOnIdle` listener](#idle-policy-and-the-autodisableonidle-listener)
 - [Stall-based homing](#stall-based-homing)
 - [The service loop](#the-service-loop)
+  - [Raw ESP-IDF `app_main` — yield the task](#raw-esp-idf-appmain-yield-the-task)
 - [Blocking move wait (20 cm)](#blocking-move-wait-20-cm)
+  - [Convenience state predicates](#convenience-state-predicates)
 - [Events](#events)
 - [Sensors, limits, and safety inputs](#sensors-limits-and-safety-inputs)
 - [TMC2209 driver split](#tmc2209-driver-split)
+  - [Currents in milliamps](#currents-in-milliamps)
+  - [Boot, diagnostics, and DIAG-based stall detection](#boot-diagnostics-and-diag-based-stall-detection)
+  - [CoolStep (load-based current scaling)](#coolstep-load-based-current-scaling)
 - [Driver authoring guide](#driver-authoring-guide)
 - [Faults, stop modes, and recovery](#faults-stop-modes-and-recovery)
 - [Composing axes by hand](#composing-axes-by-hand)
 - [Testing](#testing)
+- [Acknowledgements](#acknowledgements)
 - [License](#license)
 
 ## Features
@@ -261,6 +276,7 @@ void setup() {
     cfg.stepPin   = StepPin{18};
     cfg.dirPin    = DirectionPin{19};
     cfg.enablePin = EnablePin{21};       // active-LOW for TMC2209
+    cfg.identityProvider = &tmcConfig;   // enables axis->readDriverIdentity()
 
     auto r = Axis::createStepDirStepper(cfg);
     if (!r.ok()) { Serial.println("axis factory failed"); return; }
@@ -366,9 +382,9 @@ namespace ypmc = ungula::motor::ypmc;
 StepDirServoAxisConfig cfg;
 cfg.common.axisId = AxisId(0);
 cfg.common.units.stepsPerMm = 1000.0f;            // 10000 pulses/rev, 10 mm lead
-cfg.common.limits.maxVelocitySps = 200'000;
-cfg.common.limits.accelSpsPerSec = 800'000;
-cfg.common.limits.decelSpsPerSec = 800'000;
+cfg.common.limits.maxVelocitySps = 200000;
+cfg.common.limits.accelSpsPerSec = 800000;
+cfg.common.limits.decelSpsPerSec = 800000;
 cfg.stepPin            = StepPin{ 18 };
 cfg.dirPin             = DirectionPin{ 19 };
 cfg.enablePin          = EnablePin{ 21 };          // SRV-ON
@@ -416,9 +432,9 @@ to the event bus.
 ypmc::ServoKitConfig cfg;
 cfg.common.axisId = AxisId(0);
 cfg.common.units.stepsPerMm = 1000.0f;
-cfg.common.limits.maxVelocitySps = 200'000;
-cfg.common.limits.accelSpsPerSec = 800'000;
-cfg.common.limits.decelSpsPerSec = 800'000;
+cfg.common.limits.maxVelocitySps = 200000;
+cfg.common.limits.accelSpsPerSec = 800000;
+cfg.common.limits.decelSpsPerSec = 800000;
 cfg.stepPin            = StepPin{ 18 };
 cfg.dirPin             = DirectionPin{ 19 };
 cfg.enablePin          = EnablePin{ 21 };           // SRV-ON
@@ -450,6 +466,45 @@ The pulse engine writes both DIRs atomically inside the same
 `dirSetupUs` window. `enable()` / `disable()` flip both SRV-ON pins.
 `secondaryDirInverted = true` produces the same physical rotation
 from both motors despite opposite mounting.
+
+## Driver identity (`readDriverIdentity`)
+
+`Axis::readDriverIdentity()` is the universal "what drive is this?"
+query. It returns `vendor`, `model`, firmware bytes, and a raw identity
+word for diagnostics.
+
+Behavior by setup:
+
+- TMC2209 kit: reads IOIN through `kit->configurator` and returns `Ok`.
+- YPMC kit: returns hardcoded static identity (`RATTMOTOR`,
+  `YPMC + S2SVD15`) and returns `Ok`.
+- Compose-by-hand: returns `Unsupported` only if you did not wire any
+  provider in `cfg.identityProvider`.
+
+```cpp
+// Kit path (works for TMC2209 and YPMC kits)
+auto idr = kit->axis->readDriverIdentity();
+if (idr.ok()) {
+    const auto id = idr.takeValue();
+    // id.vendor / id.model / id.firmwareMajor / id.rawId
+}
+```
+
+```cpp
+// Compose-by-hand TMC2209: wire the configurator as provider.
+tmc2209::Tmc2209Configurator tmcConfig(tmcTransport);
+StepDirStepperAxisConfig cfg;
+cfg.identityProvider = &tmcConfig;
+```
+
+Ownership rule for kits:
+
+- Do not move `axis` out of the kit (`std::move(kit->axis)`).
+- Keep ownership in the kit and use a non-owning alias when convenient.
+
+```cpp
+Axis *axis = kit->axis.get(); // alias only; kit stays owner
+```
 
 ## Quick start — limit-switch homing
 

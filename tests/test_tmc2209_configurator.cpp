@@ -174,4 +174,41 @@ TEST(Tmc2209ConfiguratorTest, DoubleBeginRejected)
         EXPECT_EQ(cfg.begin({}).error(), ErrorCode::AlreadyInitialized);
 }
 
+// =====================================================================
+// IDriverIdentityProvider — identity lives on the driver class itself,
+// not on a separate provider. Reading IOIN[31:24] gives the chip
+// version (0x21 for production TMC2209 silicon).
+// =====================================================================
+
+TEST(Tmc2209ConfiguratorTest, ReadDriverIdentityReturnsVersionFromIoin)
+{
+        FakeTmcUart uart;
+        Tmc2209Configurator cfg(uart);
+
+        // Seed IOIN with a realistic TMC2209 version byte (0x21) in
+        // bits 31:24, plus lower bits to make sure the mask is correct.
+        uart.seed(reg::IOIN, 0x2100ABCDu);
+
+        auto r = cfg.readDriverIdentity();
+        ASSERT_TRUE(r.ok());
+        const auto id = r.takeValue();
+        EXPECT_STREQ(id.vendor, "Trinamic");
+        EXPECT_STREQ(id.model, "TMC2209");
+        EXPECT_EQ(id.firmwareMajor, 0x21u);
+        EXPECT_EQ(id.firmwareMinor, 0u);
+        EXPECT_EQ(id.rawId, 0x2100ABCDu);
+        EXPECT_EQ(uart.lastReadReg, reg::IOIN);
+}
+
+TEST(Tmc2209ConfiguratorTest, ReadDriverIdentityPropagatesTransportError)
+{
+        FakeTmcUart uart;
+        Tmc2209Configurator cfg(uart);
+
+        uart.failNextRead = true;
+        auto r = cfg.readDriverIdentity();
+        EXPECT_FALSE(r.ok());
+        EXPECT_EQ(r.error(), ErrorCode::TransportError);
+}
+
 } // namespace

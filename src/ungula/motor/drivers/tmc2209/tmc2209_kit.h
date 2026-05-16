@@ -125,6 +125,12 @@ class StepperKit {
         /// UART owned by this kit. Null for shared-UART kits.
         std::unique_ptr<ungula::hal::uart::Uart> uart;
         std::unique_ptr<Tmc2209HalUart> transport;
+        /// The configurator IS the driver-identity provider — identity
+        /// is intrinsic to the driver class, not a separate concern.
+        /// The kit wires `axisCfg.identityProvider = configurator.get()`
+        /// so `axis->readDriverIdentity()` works universally; hosts can
+        /// also call `kit->configurator->readDriverIdentity()` directly
+        /// at the chip-config layer for the same answer.
         std::unique_ptr<Tmc2209Configurator> configurator;
         /// Null when `useStallGuard == false`.
         std::unique_ptr<Tmc2209StallGuard> stallGuard;

@@ -123,18 +123,18 @@ assembleKit(const StepperKitConfig &cfg, uint8_t slaveAddress,
         if (!v.ok())
                 return Result<std::unique_ptr<StepperKit>>::Err(v.error());
 
-        auto axisCfg = buildAxisConfig(cfg);
-        auto axisRes = Axis::createStepDirStepper(axisCfg);
-        if (!axisRes.ok()) {
-                return Result<std::unique_ptr<StepperKit>>::Err(axisRes.error());
-        }
-
         ungula::hal::uart::Uart *uartRef = ownedUart ? ownedUart.get() : sharedUart;
         // Defensive: assembleKit's contract says exactly one is non-null.
         if (!uartRef) {
                 return Result<std::unique_ptr<StepperKit>>::Err(ErrorCode::InternalError);
         }
 
+        // Build transport + configurator BEFORE the axis. The
+        // configurator IS the `IDriverIdentityProvider` for the
+        // TMC2209 — identity lives on the driver class, no separate
+        // provider object needed. The configurator outlives the
+        // actuator: it's declared in the kit struct in an order that
+        // destructs after.
         auto transport = std::make_unique<Tmc2209HalUart>(*uartRef, slaveAddress);
         auto configurator = std::make_unique<Tmc2209Configurator>(*transport);
 
@@ -145,6 +145,13 @@ assembleKit(const StepperKitConfig &cfg, uint8_t slaveAddress,
         std::unique_ptr<Tmc2209CoolStep> coolStep;
         if (cfg.useCoolStep) {
                 coolStep = std::make_unique<Tmc2209CoolStep>(*transport);
+        }
+
+        auto axisCfg = buildAxisConfig(cfg);
+        axisCfg.identityProvider = configurator.get();
+        auto axisRes = Axis::createStepDirStepper(axisCfg);
+        if (!axisRes.ok()) {
+                return Result<std::unique_ptr<StepperKit>>::Err(axisRes.error());
         }
 
         auto kit = std::make_unique<StepperKit>();
