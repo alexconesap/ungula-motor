@@ -5,6 +5,7 @@
 #include "ungula/motor/axis.h"
 
 #include <cmath>
+#include <limits>
 
 #include "ungula/hal/timer/drivers/hwtimer.h"
 #include "ungula/core/time/time.h"
@@ -20,6 +21,21 @@ namespace ungula::motor
 
 namespace
 {
+
+        /// Step count passed to `planJog` for an indefinite jog. Must
+        /// fit in `Distance` (signed `int32_t`) because the planner
+        /// casts the unsigned `maxSteps` through `Distance` to pick up
+        /// the direction sign; using `UINT32_MAX` here would overflow
+        /// the cast to `-1` and collapse the jog into a one-step
+        /// move in the wrong direction (regression from 3.2.4, fixed
+        /// in 3.2.5). `INT32_MAX` at 200 kpps still lasts ~3 hours of
+        /// continuous motion — practically indefinite. This is the
+        /// natural ceiling of the planner's signed step counter, NOT a
+        /// policy cap. Bounding a jog by time, distance, or watchdog
+        /// is the host's job (recipe code, supervisor task, or an
+        /// explicit `stop()`).
+        constexpr uint32_t kJogIndefiniteSteps =
+            static_cast<uint32_t>(std::numeric_limits<int32_t>::max());
 
         constexpr bool isPinSet(uint8_t pin)
         {
@@ -444,8 +460,7 @@ Status Axis::jog(Direction direction)
         // Pre-flight TravelLimit gate — see `moveTo` for rationale.
         if (sensors_.isActive(SensorRole::TravelLimit, direction))
                 return Status::Err(ErrorCode::LimitActive);
-        constexpr uint32_t kJogSafetySteps = 1'000'000;
-        const auto move = planner_.planJog(direction, kJogSafetySteps, common_.limits,
+        const auto move = planner_.planJog(direction, kJogIndefiniteSteps, common_.limits,
                                            timerResolutionHz_, timerMinTicks_);
         return armAndStart(move, AxisState::Jogging);
 }
@@ -475,9 +490,8 @@ Status Axis::jog(Direction direction, Speed s)
         // Pre-flight TravelLimit gate — see `moveTo` for rationale.
         if (sensors_.isActive(SensorRole::TravelLimit, direction))
                 return Status::Err(ErrorCode::LimitActive);
-        constexpr uint32_t kJogSafetySteps = 1'000'000;
         const auto L = limitsForFeed(r.takeValue());
-        const auto move = planner_.planJog(direction, kJogSafetySteps, L,
+        const auto move = planner_.planJog(direction, kJogIndefiniteSteps, L,
                                            timerResolutionHz_, timerMinTicks_);
         return armAndStart(move, AxisState::Jogging);
 }
@@ -519,8 +533,7 @@ Status Axis::setMaxVelocity(Speed s)
                 motionInFlight_ = false;
                 sensors_.notifyMotionEnd();
 
-                constexpr uint32_t kJogSafetySteps = 1'000'000;
-                const auto move = planner_.planJog(d, kJogSafetySteps, common_.limits,
+                const auto move = planner_.planJog(d, kJogIndefiniteSteps, common_.limits,
                                                    timerResolutionHz_, timerMinTicks_);
 
                 // Empty plan (zero accel, pathological limits): we've
@@ -1009,10 +1022,9 @@ Status Axis::commandJog(Direction direction, Velocity feedSps)
                 return Status::Err(ErrorCode::InvalidState);
         }
         stallObservedDuringHoming_ = false; // fresh phase, fresh detection
-        constexpr uint32_t kJogSafetySteps = 1'000'000;
         const auto L = limitsForFeed(feedSps);
         const auto move =
-            planner_.planJog(direction, kJogSafetySteps, L, timerResolutionHz_, timerMinTicks_);
+            planner_.planJog(direction, kJogIndefiniteSteps, L, timerResolutionHz_, timerMinTicks_);
         if (move.totalSteps == 0)
                 return Status::Err(ErrorCode::InvalidConfig);
 

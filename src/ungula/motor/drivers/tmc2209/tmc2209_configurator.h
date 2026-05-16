@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "ungula/motor/drivers/driver_identity.h"
 #include "ungula/motor/drivers/tmc2209/i_tmc_uart.h"
 #include "ungula/motor/result.h"
 
@@ -59,7 +60,7 @@ enum class Microsteps : uint8_t {
 /// parameter values surface as `InvalidConfig`. The configurator
 /// makes NO attempt to recover or retry — that's the host's policy
 /// decision.
-class Tmc2209Configurator {
+class Tmc2209Configurator : public IDriverIdentityProvider {
     public:
         struct Config {
                 /// Run-coil current in mA RMS. The configurator converts this
@@ -164,6 +165,14 @@ class Tmc2209Configurator {
         /// bug — keeping this method's body honest is the regression
         /// test in `test_tmc2209_configurator`).
         Status clearGstat();
+
+        // ---- IDriverIdentityProvider ------------------------------------
+
+        /// Reads `IOIN` and extracts the chip's version byte (bits 31:24
+        /// per the TMC2209 datasheet — production silicon reports 0x21).
+        /// Returns vendor="Trinamic", model="TMC2209", firmwareMajor =
+        /// version byte, firmwareMinor=0, rawId = full IOIN word.
+        Result<DriverIdentity> readIdentity() override;
 
         // ---- Cached state inspection -------------------------------------
         //

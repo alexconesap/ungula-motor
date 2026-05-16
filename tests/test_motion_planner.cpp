@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <limits>
 
 #include "ungula/motor/axis_types.h"
 #include "ungula/motor/planning/motion_planner.h"
@@ -358,6 +359,44 @@ TEST(MotionPlannerTest, MinPulseWidthClampsHalfPeriod)
                         minHp = m.segments[i].halfPeriodTicks;
         }
         EXPECT_GE(minHp, 50u);
+}
+
+// =====================================================================
+// Indefinite-jog cast safety
+// =====================================================================
+// Regression for the 3.2.4 → 3.2.5 bug. `Axis` passes the
+// "indefinite" step count to `planJog` as a `uint32_t`. `planJog`
+// casts it through `Distance` (`int32_t`) to derive the direction
+// sign; any value above `INT32_MAX` overflows to a negative number
+// and the planner falls into the short-move fallback (< 4 steps),
+// producing a 1-step move in the OPPOSITE direction. The hardware
+// symptom was "motor emits one step per service() cycle in the wrong
+// direction". The fix is to use `INT32_MAX` as the constant; these
+// tests pin the contract.
+
+TEST(MotionPlannerTest, IndefiniteJogForwardPreservesDirection)
+{
+        MotionPlanner p;
+        TrajectoryLimits l = sensibleLimits();
+        const uint32_t indefSteps =
+            static_cast<uint32_t>(std::numeric_limits<int32_t>::max());
+        const auto m = p.planJog(Direction::Forward, indefSteps, l, RES_HZ);
+
+        EXPECT_EQ(m.direction, Direction::Forward);
+        EXPECT_GT(m.totalSteps, 4u) << "regression: cast overflow would put us "
+                                       "in the short-move fallback";
+}
+
+TEST(MotionPlannerTest, IndefiniteJogBackwardPreservesDirection)
+{
+        MotionPlanner p;
+        TrajectoryLimits l = sensibleLimits();
+        const uint32_t indefSteps =
+            static_cast<uint32_t>(std::numeric_limits<int32_t>::max());
+        const auto m = p.planJog(Direction::Backward, indefSteps, l, RES_HZ);
+
+        EXPECT_EQ(m.direction, Direction::Backward);
+        EXPECT_GT(m.totalSteps, 4u);
 }
 
 } // namespace
