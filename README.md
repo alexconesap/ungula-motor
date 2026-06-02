@@ -13,6 +13,10 @@ Supported motor families:
 - **Generic STEP/DIR** (DM542, TB6600, any plain STEP/DIR drive).
 - **MyActuator RMD** CAN servos.
 
+> **LLM usage note:** if this library is consumed from a coding AI workflow, explicitly point the agent to `API.md` first. `API.md` is the LLM-facing contract (public API + examples + constraints) and avoids wasting time/tokens scanning source files and this human-oriented README.
+
+> **Warning - Active Development:** This library is under active architecture work to support multiple projects in parallel. Its structure is not finalized yet and may change without notice while this work is in progress. Updates are currently frequent (often daily). Target for structural freeze and stable `v1.0.0`: **June 2026**.
+
 ## Design
 
 Five rules the library doesn't break:
