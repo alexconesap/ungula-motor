@@ -185,9 +185,21 @@ Status LimitSystem::begin(const LimitWiring *wirings, uint8_t count,
                 s.candidateSinceMs = 0;
                 s.isrEdgeLatched.store(false, std::memory_order_relaxed);
 
-                const auto pull = (cfg.polarity == SwitchPolarity::NormallyClosed) ?
-                                      gpio::PullMode::UP :
-                                      gpio::PullMode::DOWN;
+                // Resolve pull mode: Hardware/Input -> NONE, Internal/Polarity -> infer from polarity
+                gpio::PullMode pull;
+                switch (cfg.pullMode) {
+                case LimitPinPullMode::McU:
+                case LimitPinPullMode::Polarity:
+                        pull = (cfg.polarity == SwitchPolarity::NormallyClosed) ?
+                                   gpio::PullMode::UP :
+                                   gpio::PullMode::DOWN;
+                        break;
+                case LimitPinPullMode::HardwareResistors:
+                case LimitPinPullMode::Input:
+                default:
+                        pull = gpio::PullMode::NONE;
+                        break;
+                }
 
                 if (attachesIsr(cfg.kind)) {
                         const auto edge = (cfg.polarity == SwitchPolarity::NormallyClosed) ?
@@ -433,8 +445,8 @@ void LimitSystem::service(int64_t nowMs)
                         //   halt, use `EmergencyLimit` instead —
                         //   it stops the engine directly from the
                         //   ISR with zero polling latency.
-                        const bool edge = s.isrEdgeLatched.exchange(
-                            false, std::memory_order_acq_rel);
+                        const bool edge =
+                            s.isrEdgeLatched.exchange(false, std::memory_order_acq_rel);
                         const bool active = readActive(s.cfg);
                         const bool prevPolledActive = s.candidateActive;
 
@@ -447,8 +459,7 @@ void LimitSystem::service(int64_t nowMs)
                         }
 
                         const int64_t elapsed = nowMs - s.candidateSinceMs;
-                        const int64_t debounceMs =
-                            static_cast<int64_t>(s.cfg.debounceMs);
+                        const int64_t debounceMs = static_cast<int64_t>(s.cfg.debounceMs);
 
                         if (!s.stableActive) {
                                 // Fast path - ISR edge + two-tick

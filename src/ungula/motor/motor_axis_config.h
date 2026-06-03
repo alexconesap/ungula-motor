@@ -45,8 +45,7 @@ struct MotorAxisConfig {
         /// stays at `GPIO_NONE`, which the limit system treats as
         /// unused). The auto-count overload of
         /// `LimitSystem::begin(cfg.limits_wiring, engine)` figures
-        /// out how many slots are in use - hosts do not maintain
-        /// a separate count.
+        /// out how many slots are in use
         LimitWiring limits_wiring[MAX_LIMIT_INPUTS];
 };
 

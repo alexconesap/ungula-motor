@@ -50,14 +50,48 @@ enum class SwitchPolarity : uint8_t {
         NormallyClosed,
 };
 
+/// Pin pull up / pull down mode. Determines how the GPIO pin is configured: 'Input', 'Input with PullUp', or 'Input with PullDown'.
+/// - Set it as `HardwareResistors` if the pin is pulled up/down by hardware. It is equivalent to set the GPIO as `Input` but explicitly indicating that there are external pull resistors.
+/// - Set it as `McU` to use the microcontroller's internal pull resistors. Note that certain GPIO pins may not support internal pull-ups or pull-downs like EPS32 34-39, so check your microcontroller's datasheet to ensure compatibility.
+/// - Set it as `Polarity` to let the limit system decide based on the polarity (NO = pull down, NC = pull up).
+/// - Set it as `Input` to leave the pin floating (not recommended if no hardware pull resistors are present).
+enum class LimitPinPullMode : uint8_t {
+        HardwareResistors,
+        McU,
+        Polarity,
+        Input,
+};
+
 /// One row of the host's `MotorAxisConfig::limits_wiring[]` array.
 /// Fixed-size struct, copied by value into the limit system at
 /// `begin()`.
 struct LimitWiring {
+        // GPIO pin number. `GPIO_NONE` (0xFF) means this slot is unused and the limit system ignores it.
         uint8_t pin = GPIO_NONE;
+
+        // What this limit is? A limit switch? An emergency stop? A homing sensor? A stall input?
         LimitKind kind = LimitKind::TravelLimit;
-        Direction direction = Direction::Forward; // which side this limit guards
+
+        // Which motion 'direction' this limit guards
+        // For linear axes, Forward = away from the home/back limit, Backward = toward it.
+        // For rotary axes, the mapping is up to the host and has no effect on the lib's internal logic.
+        Direction direction = Direction::Forward;
+
+        // Switch wiring `polarity` (NO vs NC).
+        // The limit system configures pull mode automatically per polarity, unless explicitly overridden
+        // by setting `pullMode`
         SwitchPolarity polarity = SwitchPolarity::NormallyOpen;
+
+        // `pullMode`
+        // Pin pull up / pull down mode. Determines how the GPIO pin is configured: 'Input', 'Input with PullUp', or 'Input with PullDown'.
+        // Set it as `HardwareResistors` if the pin is pulled up/down by hardware. It is equivalent to set the GPIO as `Input` but explicitly indicating that there are external pull resistors.
+        // Set it as `McU` to use the microcontroller's internal pull resistors. Note that certain GPIO pins may not support internal pull-ups or pull-downs like EPS32 34-39, so check your microcontroller's datasheet to ensure compatibility.
+        // Set it as `Polarity` to let the limit system decide based on the polarity (NO = pull down, NC = pull up).
+        // Set it as `Input` to leave the pin floating (not recommended if no hardware pull resistors are present).
+        LimitPinPullMode pullMode = LimitPinPullMode::Polarity;
+
+        // Debounce time in ms. For polled limits, this is the debounce time for the raw input reading.
+        // For ISR limits, this is the duration of the "arm window"
         uint16_t debounceMs = 20;
 
         // Stall-only knobs (ignored for non-Stall kinds). The
@@ -66,6 +100,7 @@ struct LimitWiring {
         // does not duplicate it here - the limit-system slot only
         // owns the host-side debounce + arm-window timing.
         uint16_t stallArmDelayMs = 200;
+
         // `stallHitsToTrigger` counts rising edges on the stall pin.
         // Default 1 because the typical source (TMC2209 DIAG) is
         // LEVEL-HELD when stalled: the pin goes HIGH and stays HIGH,
@@ -76,9 +111,9 @@ struct LimitWiring {
 };
 
 /// Hard cap on how many limit inputs a single axis can carry. Sized for
-/// the worst documented scenario (Nicky-RBB1: 4 limit switches +
-/// optional home + optional stall = 6). Bumped to 8 for headroom; no
-/// runtime cost when fewer are used.
+/// the worst documented scenario in our projects at Ungula:
+/// (Nicky-RBB1: 4 limit switches + optional home + optional stall = 6).
+/// Bumped to 8 for headroom; no runtime cost when fewer are used.
 constexpr uint8_t MAX_LIMIT_INPUTS = 8;
 
 /// Default debounced limit + ISR-stall system. Polled limits read in
