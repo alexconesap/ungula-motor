@@ -750,6 +750,18 @@ public:
 system can call `stop(Immediate)` from interrupt context when an
 EmergencyLimit or StallSensor fires.
 
+`polarity` (NO/NC) and `pullMode` are **orthogonal**:
+
+- `polarity` drives the **GPIO interrupt edge**: NO → Rising, NC → Falling.
+- `pullMode` drives the **GPIO pull direction**: UP, DOWN, or NONE.
+
+`McU` / `Polarity` infer the pull from `polarity` (NO→down, NC→up).
+`InternalPullUp` / `InternalPullDown` force the pull regardless of
+polarity — needed for fail-safe wiring schemes where the polarity
+setting required for edge detection doesn't match the required pull
+direction (e.g. NC-to-GND switch read active-HIGH:
+`polarity=NormallyOpen` + `InternalPullUp`).
+
 `TravelLimit` rows are direction-tagged. The axis halts only when
 moving in the matched direction, leaving the host free to back away.
 
