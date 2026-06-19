@@ -55,11 +55,17 @@ enum class SwitchPolarity : uint8_t {
 /// - Set it as `McU` to use the microcontroller's internal pull resistors. Note that certain GPIO pins may not support internal pull-ups or pull-downs like EPS32 34-39, so check your microcontroller's datasheet to ensure compatibility.
 /// - Set it as `Polarity` to let the limit system decide based on the polarity (NO = pull down, NC = pull up).
 /// - Set it as `Input` to leave the pin floating (not recommended if no hardware pull resistors are present).
+/// - Set it as `InternalPullUp` / `InternalPullDown` to FORCE the internal pull
+///   direction independent of polarity — for boards whose switch wiring needs a
+///   pull that the polarity inference wouldn't choose (e.g. a fail-safe NC switch
+///   to GND read active-HIGH: NormallyOpen polarity + InternalPullUp).
 enum class LimitPinPullMode : uint8_t {
         HardwareResistors,
         McU,
         Polarity,
         Input,
+        InternalPullUp,
+        InternalPullDown,
 };
 
 /// One row of the host's `MotorAxisConfig::limits_wiring[]` array.

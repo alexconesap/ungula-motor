@@ -706,12 +706,27 @@ enum class SwitchPolarity : uint8_t {
     NormallyOpen, NormallyClosed,
 };
 
+enum class LimitPinPullMode : uint8_t {
+    HardwareResistors,  // no MCU pull — rely on external resistors
+    McU,                // MCU internal pull, direction inferred: NO→down, NC→up
+    Polarity,           // same as McU, explicit intent label
+    Input,              // floating pin, no pull
+    InternalPullUp,     // force MCU pull-up regardless of polarity
+    InternalPullDown,   // force MCU pull-down regardless of polarity
+};
+// Behaviour groups (maps to gpio::PullMode):
+//   { HardwareResistors, Input }          → NONE
+//   { McU, Polarity }                     → infer from polarity: NO→DOWN, NC→UP
+//   { InternalPullUp }                     → UP (ignores polarity)
+//   { InternalPullDown }                   → DOWN (ignores polarity)
+
 struct LimitWiring {
-    uint8_t        pin = GPIO_NONE;
-    LimitKind      kind = LimitKind::TravelLimit;
-    Direction      direction = Direction::Forward;
-    SwitchPolarity polarity = SwitchPolarity::NormallyOpen;
-    uint16_t       debounceMs = 20;
+    uint8_t           pin = GPIO_NONE;
+    LimitKind         kind = LimitKind::TravelLimit;
+    Direction         direction = Direction::Forward;
+    SwitchPolarity    polarity = SwitchPolarity::NormallyOpen;
+    LimitPinPullMode  pullMode = LimitPinPullMode::Polarity;
+    uint16_t          debounceMs = 20;
     // Stall-only timing (sensitivity is a chip-side concern -
     // see `Tmc2209Config::stallSensitivity`).
     uint16_t       stallArmDelayMs = 200;

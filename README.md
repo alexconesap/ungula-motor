@@ -554,6 +554,27 @@ sensors that can halt motion. Four kinds:
   TMC2209's DIAG pin), debounced + windowed by `stallArmDelayMs` and
   `stallHitsToTrigger`.
 
+### Pin pull configuration
+
+Each `LimitWiring` entry has a `polarity` (NO vs NC) and a `pullMode`.
+`polarity` drives the **interrupt edge** (Rising for NO, Falling for NC).
+`pullMode` drives the **GPIO pull direction**. These are orthogonal:
+
+| `pullMode` | Pull applied | When to use |
+| --- | --- | --- |
+| `HardwareResistors` | None (pin floating) | External pull resistor on the board |
+| `McU` | Infers from `polarity`: NO→down, NC→up | MCU internal resistor, polarity decides direction |
+| `Polarity` | Same as `McU` (explicit label) | Same, intent is clearer in config |
+| `Input` | None | Floating pin — only if hardware pulls are external |
+| `InternalPullUp` | Always UP | Force pull-up regardless of polarity |
+| `InternalPullDown` | Always DOWN | Force pull-down regardless of polarity |
+
+The two "force" modes exist because some wiring schemes need a pull
+direction that doesn't follow the polarity. Example: a fail-safe NC
+switch to GND that you want to read active-HIGH:
+`polarity = NormallyOpen` (Rising edge) + `InternalPullUp` (PullUp resistor
+so the floating pin reads HIGH when the switch opens).
+
 `LimitSystem` is wired into the `MotorAxis` constructor:
 
 ```cpp

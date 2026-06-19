@@ -194,6 +194,12 @@ Status LimitSystem::begin(const LimitWiring *wirings, uint8_t count,
                                    gpio::PullMode::UP :
                                    gpio::PullMode::DOWN;
                         break;
+                case LimitPinPullMode::InternalPullUp:
+                        pull = gpio::PullMode::UP;
+                        break;
+                case LimitPinPullMode::InternalPullDown:
+                        pull = gpio::PullMode::DOWN;
+                        break;
                 case LimitPinPullMode::HardwareResistors:
                 case LimitPinPullMode::Input:
                 default:
