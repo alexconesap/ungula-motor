@@ -153,6 +153,12 @@ class RmtStepSignal final : public IStepSignalGenerator {
         // Motion state shared with the on_trans_done ISR callback.
         std::atomic<bool> running_{ false };
         std::atomic<bool> faulted_{ false };
+        // Set true by stop() when it halts a running transmission. The encoder is
+        // told to COMPLETE, so that transmission's on_trans_done STILL fires — this
+        // flag makes the next completion callback no-op so a stopped move's late ISR
+        // can't clear `running_` of the NEXT move armed right after it (which left
+        // the axis wedged: motor moving but running_=false, or stuck busy).
+        std::atomic<bool> ignoreNextDone_{ false };
         std::atomic<int32_t> pendingSegments_{ 0 };
         std::atomic<int32_t> commandedPosition_{ 0 };
         std::atomic<uint32_t> commandedSpsNow_{ 0 };

@@ -355,6 +355,7 @@ void RmtStepSignal::end()
         begun_ = false;
         running_.store(false, std::memory_order_release);
         faulted_.store(false, std::memory_order_release);
+        ignoreNextDone_.store(false, std::memory_order_release);
         pendingSegments_.store(0, std::memory_order_release);
 }
 
@@ -528,6 +529,10 @@ Status RmtStepSignal::stop(StopMode mode)
         pendingSegments_.store(0, std::memory_order_release);
         commandedSpsNow_.store(0, std::memory_order_release);
         finishedReason_.store(StopReason::UserStop, std::memory_order_release);
+        // The halted transmission's on_trans_done still fires (the encoder was told
+        // to COMPLETE) — flag it so that callback is dropped and can't clobber a
+        // move armed before it lands.
+        ignoreNextDone_.store(true, std::memory_order_release);
         return Status::Ok();
 }
 
@@ -595,6 +600,12 @@ bool IRAM_ATTR RmtStepSignal::onTxDoneCallback(void * /*channel*/, const void * 
 {
         auto *self = static_cast<RmtStepSignal *>(userCtx);
         if (self == nullptr) {
+                return false;
+        }
+        // Drop the completion of a stopped transmission — its `running_`/position
+        // were already settled by stop(), and acting here would clobber a move
+        // armed in the meantime.
+        if (self->ignoreNextDone_.exchange(false, std::memory_order_acq_rel)) {
                 return false;
         }
         const int32_t remaining = self->pendingSegments_.fetch_sub(1, std::memory_order_acq_rel);
