@@ -27,10 +27,12 @@ bool LimitSystem::attachesIsr(LimitKind k)
 {
         // Kinds whose pin needs a GPIO interrupt attached. Everything
         // that fires asynchronously qualifies — including TravelLimit
-        // since 1.0.2, so the lib can catch hand-tap presses that fall
-        // entirely between two FreeRTOS ticks.
+        // since 1.0.2 and HomeSensor since 1.2.0, so the lib can catch
+        // presses that fall entirely between two FreeRTOS ticks (a home
+        // switch that was polled-only could be skipped at a fast jog or a
+        // hand-tap on the bench).
         return k == LimitKind::EmergencyLimit || k == LimitKind::StallSensor ||
-               k == LimitKind::TravelLimit;
+               k == LimitKind::TravelLimit || k == LimitKind::HomeSensor;
 }
 
 bool LimitSystem::readActive(const LimitWiring &cfg)
@@ -54,15 +56,17 @@ UNGULA_ISR_ATTR void LimitSystem::onIsrTrampoline(void *ctx)
                 }
                 self->emergencyLatched_.store(true, std::memory_order_release);
                 break;
+        case LimitKind::HomeSensor:
         case LimitKind::TravelLimit:
-                // Only latch — direction filtering happens task-side
-                // in `pumpLimits`, which issues the actual stop if the
-                // limit guards the current motion direction. Stopping
-                // here would halt motion that is reversing OFF the
-                // switch (the pin is still HIGH, but no rising edge
-                // fires; this branch only runs on the ASSERTING edge
-                // so we still need the polled deactivation path to
-                // clear `stableActive`).
+                // Only latch — for TravelLimit the direction filtering
+                // happens task-side in `pumpLimits`, which issues the
+                // actual stop if the limit guards the current motion
+                // direction; for HomeSensor the homing strategy reads
+                // `isActive(HomeSensor)` and stops itself. Stopping here
+                // would halt motion that is reversing OFF the switch (the
+                // pin is still HIGH, but no rising edge fires; this branch
+                // only runs on the ASSERTING edge so we still need the
+                // polled deactivation path to clear `stableActive`).
                 if (binding->slotIndex < MAX_LIMIT_INPUTS) {
                         self->slots_[binding->slotIndex].isrEdgeLatched.store(
                             true, std::memory_order_release);
@@ -257,17 +261,19 @@ Status LimitSystem::begin(const LimitWiring *wirings, uint8_t count,
                 }
         }
 
-        // Boot-time level seed for TravelLimit. Edge interrupts miss
-        // the case where the switch is ALREADY pressed at the moment
-        // `begin()` finishes — the rising edge happened earlier and is
-        // gone for good. A one-shot live read after the ISR is armed
-        // catches that case, so `armJog` / `armMove` correctly refuse
-        // to drive INTO the already-pressed limit. (EmergencyLimit and
-        // StallSensor have their own task-side level-trip recovery,
-        // documented next to the stall path below.)
+        // Boot-time level seed for TravelLimit + HomeSensor. Edge
+        // interrupts miss the case where the switch is ALREADY pressed at
+        // the moment `begin()` finishes — the rising edge happened earlier
+        // and is gone for good. A one-shot live read after the ISR is
+        // armed catches that case, so `armJog` / `armMove` correctly refuse
+        // to drive INTO an already-pressed travel limit, and a homing call
+        // that starts ON the home switch sees `isActive(HomeSensor)` at
+        // once. (EmergencyLimit and StallSensor have their own task-side
+        // level-trip recovery, documented next to the stall path below.)
         for (uint8_t i = 0; i < slotCount_; ++i) {
                 Slot &s = slots_[i];
-                if (!s.inUse || s.cfg.kind != LimitKind::TravelLimit) {
+                if (!s.inUse ||
+                    (s.cfg.kind != LimitKind::TravelLimit && s.cfg.kind != LimitKind::HomeSensor)) {
                         continue;
                 }
                 if (readActive(s.cfg)) {
@@ -391,10 +397,12 @@ void LimitSystem::service(int64_t nowMs)
                         continue;
                 }
 
-                if (s.cfg.kind == LimitKind::TravelLimit) {
-                        // TravelLimit activation/deactivation model
-                        // (1.0.3+, after field testing exposed two
-                        // failure modes in earlier 1.0.2 iterations).
+                if (s.cfg.kind == LimitKind::TravelLimit || s.cfg.kind == LimitKind::HomeSensor) {
+                        // TravelLimit / HomeSensor activation/deactivation
+                        // model (1.0.3+, after field testing exposed two
+                        // failure modes in earlier 1.0.2 iterations; HomeSensor
+                        // joined this ISR+two-tick path in 1.2.0 — it was
+                        // polled-only before and missed fast/brief presses).
                         //
                         // ACTIVATION — two-tick confirmation
                         //   The asserting GPIO edge fires the ISR,
@@ -504,23 +512,8 @@ void LimitSystem::service(int64_t nowMs)
                 if (stopsInIsr(s.cfg.kind)) {
                         continue; // EmergencyLimit: ISR halts + latches; nothing to poll.
                 }
-
-                // Remaining polled path: HomeSensor (read by the
-                // homing strategy via `isActive`; debounced here so
-                // sensor chatter doesn't false-positive the home
-                // detection).
-                const bool active = readActive(s.cfg);
-                if (active != s.candidateActive) {
-                        s.candidateActive = active;
-                        s.candidateSinceMs = nowMs;
-                        continue;
-                }
-                if (active != s.stableActive) {
-                        const int64_t elapsed = nowMs - s.candidateSinceMs;
-                        if (elapsed >= static_cast<int64_t>(s.cfg.debounceMs)) {
-                                s.stableActive = active;
-                        }
-                }
+                // No polled-only kinds remain — HomeSensor now shares the
+                // TravelLimit ISR + two-tick activation path above.
         }
 
         // Stall-counter cleanup: discard counts accumulated while

@@ -41,6 +41,11 @@ class HomeToLimitStrategy final : public IHomingStrategy {
         {
                 return failureReason_;
         }
+        void cancel() override
+        {
+                active_ = false;
+                phase_ = Phase::Idle;
+        }
 
     private:
         enum class Phase : uint8_t {

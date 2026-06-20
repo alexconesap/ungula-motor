@@ -396,7 +396,10 @@ Status MotorAxis::clearFault()
 
 Status MotorAxis::armMove(Direction dir, uint32_t targetSteps)
 {
-        if (limits_ != nullptr && limits_->isActive(LimitKind::TravelLimit, dir)) {
+        // A home switch is a hard limit at the home end too — refuse to drive INTO
+        // either a travel limit or the home sensor that guards this direction.
+        if (limits_ != nullptr && (limits_->isActive(LimitKind::TravelLimit, dir) ||
+                                   limits_->isActive(LimitKind::HomeSensor, dir))) {
                 return Status::Err(ErrorCode::LimitActive);
         }
         const auto s = driver_.armMove(dir, targetSteps, resolvedCruiseSps_, resolvedAccelSps2_,
@@ -417,7 +420,11 @@ Status MotorAxis::armMove(Direction dir, uint32_t targetSteps)
 
 Status MotorAxis::armJog(Direction dir)
 {
-        if (limits_ != nullptr && limits_->isActive(LimitKind::TravelLimit, dir)) {
+        // See armMove: the home sensor blocks a jog into it the same as a travel
+        // limit. (Homing never trips this — its strategy short-circuits to success
+        // when it starts already on the home sensor, before arming a jog.)
+        if (limits_ != nullptr && (limits_->isActive(LimitKind::TravelLimit, dir) ||
+                                   limits_->isActive(LimitKind::HomeSensor, dir))) {
                 return Status::Err(ErrorCode::LimitActive);
         }
         const auto s = driver_.armJog(dir, resolvedCruiseSps_, resolvedAccelSps2_);
@@ -534,13 +541,26 @@ Status MotorAxis::stop()
             state_ != MotorState::Homing && state_ != MotorState::Stopping) {
                 return Status::Err(ErrorCode::InvalidState);
         }
+        // A manual stop during homing ABORTS the homing strategy. Without this the
+        // strategy stays active across the Stopping->Idle settle and fights the next
+        // home()/jog (the axis looked Idle to the host but kept getting wedged).
+        if (homing_ != nullptr && homing_->isActive()) {
+                homing_->cancel();
+        }
         const auto s = driver_.stop(StopMode::Decelerate);
         // If the driver doesn't support a decel ramp, fall back to
         // immediate stop. We do not pretend the decel happened.
         if (!s.ok() && s.error() == ErrorCode::Unsupported) {
                 (void)driver_.stop(StopMode::Immediate);
         }
-        if (state_ != MotorState::Stopping) {
+        if (!motionInFlight_) {
+                // Nothing is actually in flight (homing that short-circuited on an
+                // already-active sensor, or a motion that just settled). pumpMotion
+                // only drives the Stopping->Idle edge while a motion was running, so
+                // routing through Stopping here would wedge the axis. Go straight to
+                // Idle.
+                transition(MotorState::Idle);
+        } else if (state_ != MotorState::Stopping) {
                 transition(MotorState::Stopping);
         }
         return Status::Ok();
@@ -548,6 +568,9 @@ Status MotorAxis::stop()
 
 Status MotorAxis::emergencyStop()
 {
+        if (homing_ != nullptr && homing_->isActive()) {
+                homing_->cancel();
+        }
         const auto s = driver_.stop(StopMode::Immediate);
         (void)s; // we transition regardless of driver outcome
         if (limits_ != nullptr) {
@@ -683,8 +706,15 @@ void MotorAxis::pumpLimits(int64_t nowMs)
                 }
                 return;
         }
-        // Polled TravelLimit: halt if active in the in-flight direction.
-        if (motionInFlight_ && limits_->isActive(LimitKind::TravelLimit, activeDirection_)) {
+        // Polled limit halt if active in the in-flight direction. The home sensor
+        // counts as a hard limit for any NON-homing motion (manual jog, section
+        // move) — its whole reason to exist is to stop the carriage at the home end
+        // and prevent damage; homing is excluded because its own strategy issues
+        // the stop and resets position.
+        const bool travelHit = limits_->isActive(LimitKind::TravelLimit, activeDirection_);
+        const bool homeHit = state_ != MotorState::Homing &&
+                             limits_->isActive(LimitKind::HomeSensor, activeDirection_);
+        if (motionInFlight_ && (travelHit || homeHit)) {
                 (void)driver_.stop(StopMode::Immediate);
                 motionInFlight_ = false;
                 limits_->notifyMotionEnd();

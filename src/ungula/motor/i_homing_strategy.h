@@ -42,6 +42,15 @@ class IHomingStrategy {
 
         virtual bool succeeded() const = 0;
         virtual StopReason failureReason() const = 0;
+
+        /// Abort the strategy NOW and return it to an inactive, neutral
+        /// state. Called by `MotorAxis::stop()` / `emergencyStop()` so a
+        /// manual stop during homing doesn't leave the strategy lingering
+        /// (which would fight the next motion command). Default no-op for
+        /// strategies that don't hold abortable state.
+        virtual void cancel()
+        {
+        }
 };
 
 } // namespace ungula::motor
