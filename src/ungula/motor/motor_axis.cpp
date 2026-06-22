@@ -581,15 +581,18 @@ Status MotorAxis::softStop()
         if (homing_ != nullptr && homing_->isActive()) {
                 homing_->cancel();
         }
-        // Decelerate at a QUARTER of the configured acceleration when no separate
-        // deceleration was set (the common case: a project configures only accel).
-        // Accel must be gentle for a heavy load starting from rest; the stop only
-        // needs to take the edge off the clunk, so a much steeper rampdown is fine.
-        // If a distinct decel WAS configured (resolvedDecelSps2_ != accel), honour
-        // it as-is. Zero accel (no-ramp config) leaves nothing to scale → hard stop.
+        // Stop in a QUARTER of the acceleration ramp TIME. Acceleration is stored
+        // as a RATE (steps/s²); for the same cruise speed, a quarter of the ramp
+        // time means FOUR TIMES the rate (rate ∝ 1/time). So a heavy load can still
+        // ramp UP gently while the stop just takes the edge off the clunk quickly.
+        // If a distinct decel rate WAS configured (resolvedDecelSps2_ != accel),
+        // honour it as-is. Zero accel (no-ramp config) → nothing to scale → hard stop.
         const bool hasExplicitDecel =
             resolvedDecelSps2_ != 0u && resolvedDecelSps2_ != resolvedAccelSps2_;
-        const uint32_t decel = hasExplicitDecel ? resolvedDecelSps2_ : (resolvedAccelSps2_ / 4u);
+        const uint64_t quarterTimeRate = static_cast<uint64_t>(resolvedAccelSps2_) * 4u;
+        const uint32_t fastDecel =
+            (quarterTimeRate > UINT32_MAX) ? UINT32_MAX : static_cast<uint32_t>(quarterTimeRate);
+        const uint32_t decel = hasExplicitDecel ? resolvedDecelSps2_ : fastDecel;
         const auto s = (decel > 0u) ? driver_.decelStop(decel) : driver_.stop(StopMode::Immediate);
         if (!motionInFlight_) {
                 // Nothing actually in flight — go straight to Idle (mirrors stop()).

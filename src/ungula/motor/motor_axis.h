@@ -69,10 +69,11 @@ class MotorAxis final {
         Status home();
         Status stop();
         /// Decelerate the in-flight motion to a controlled stop, meant for
-        /// cancelling a jog without the hard-stop clunk. Uses an explicitly
-        /// configured deceleration if one was set; otherwise a QUARTER of the
-        /// configured acceleration (accel can be gentle for a heavy load from
-        /// rest, but the stop only needs to take the edge off). Falls back to a
+        /// cancelling a jog without the hard-stop clunk. Stops in a QUARTER of the
+        /// acceleration ramp TIME — i.e. four times the acceleration RATE, since
+        /// rate is inversely proportional to ramp time (accel can stay gentle for a
+        /// heavy load from rest, while the stop is quick). Uses an explicitly
+        /// configured deceleration rate instead if one was set. Falls back to a
         /// hard stop when no ramp is configured or the generator can't splice a
         /// rampdown. Use `stop()` for a forced halt.
         Status softStop();
