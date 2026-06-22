@@ -90,6 +90,15 @@ namespace
                 PlannedMove decelMove{};
                 std::atomic<bool> decelPending{ false };
                 bool decelEngaged = false;
+
+                // True once the encoder has run a move to FULL expansion (its last
+                // symbol emitted) — i.e. a genuine motion completion, NOT a forced
+                // `stopRequested` abort. on_trans_done acts ONLY on a natural
+                // completion: a done raised by an aborted/disabled transmission has
+                // this false and is dropped. This is authoritative (the encoder
+                // knows why it ended), unlike a "drop the next done" guess that
+                // sticks if the aborted transmission never raises a done at all.
+                std::atomic<bool> naturalComplete{ false };
         };
 
         inline void applySlots(StepEncoder *self, const rmtgen::SymbolSlots &s)
@@ -137,6 +146,7 @@ namespace
                 // First entry of a fresh move (or empty move): prime the first
                 // symbol. loadNextSymbol clears symbolReady when there is none.
                 if (!self->symbolReady && !loadNextSymbol(self)) {
+                        self->naturalComplete.store(true, std::memory_order_release);
                         *ret_state = RMT_ENCODING_COMPLETE;
                         return 0;
                 }
@@ -192,6 +202,9 @@ namespace
                 }
 
                 if (!self->symbolReady) {
+                        // Move fully expanded — a genuine completion (not a forced
+                        // stop). Mark it so on_trans_done honours this done.
+                        self->naturalComplete.store(true, std::memory_order_release);
                         state = static_cast<rmt_encode_state_t>(state | RMT_ENCODING_COMPLETE);
                 }
                 *ret_state = state;
@@ -221,6 +234,7 @@ namespace
                 self->stopRequested.store(false, std::memory_order_relaxed);
                 self->decelPending.store(false, std::memory_order_relaxed);
                 self->decelEngaged = false;
+                self->naturalComplete.store(false, std::memory_order_relaxed);
                 return ESP_OK;
         }
 
@@ -378,7 +392,6 @@ void RmtStepSignal::end()
         begun_ = false;
         running_.store(false, std::memory_order_release);
         faulted_.store(false, std::memory_order_release);
-        ignoreNextDone_.store(false, std::memory_order_release);
         pendingSegments_.store(0, std::memory_order_release);
 }
 
@@ -552,10 +565,10 @@ Status RmtStepSignal::stop(StopMode mode)
         pendingSegments_.store(0, std::memory_order_release);
         commandedSpsNow_.store(0, std::memory_order_release);
         finishedReason_.store(StopReason::UserStop, std::memory_order_release);
-        // The halted transmission's on_trans_done still fires (the encoder was told
-        // to COMPLETE) — flag it so that callback is dropped and can't clobber a
-        // move armed before it lands.
-        ignoreNextDone_.store(true, std::memory_order_release);
+        // No need to flag the done: this was a FORCED stop, so the encoder never
+        // raised `naturalComplete`. If the aborted transmission's on_trans_done
+        // fires (or never does), it's dropped either way — and the next armMove
+        // resets the flag, so a real completion after it is still honoured.
         return Status::Ok();
 }
 
@@ -652,10 +665,18 @@ bool IRAM_ATTR RmtStepSignal::onTxDoneCallback(void * /*channel*/, const void * 
         if (self == nullptr) {
                 return false;
         }
-        // Drop the completion of a stopped transmission — its `running_`/position
-        // were already settled by stop(), and acting here would clobber a move
-        // armed in the meantime.
-        if (self->ignoreNextDone_.exchange(false, std::memory_order_acq_rel)) {
+        // Act ONLY on a genuine motion completion. The encoder raises
+        // `naturalComplete` when it expands a move to its last symbol; a done
+        // raised by a force-stopped / disabled transmission leaves it false and
+        // is dropped here (its `running_`/position were already settled by stop(),
+        // and acting would clobber a move armed in the meantime). Authoritative —
+        // unlike a "drop the next done" flag, this never strands `running_` true
+        // when an aborted transmission simply never raises a done.
+        if (self->encoder_ == nullptr) {
+                return false;
+        }
+        auto *stepEnc = __containerof(static_cast<rmt_encoder_t *>(self->encoder_), StepEncoder, base);
+        if (!stepEnc->naturalComplete.exchange(false, std::memory_order_acq_rel)) {
                 return false;
         }
         const int32_t remaining = self->pendingSegments_.fetch_sub(1, std::memory_order_acq_rel);

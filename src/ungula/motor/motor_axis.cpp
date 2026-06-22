@@ -581,10 +581,15 @@ Status MotorAxis::softStop()
         if (homing_ != nullptr && homing_->isActive()) {
                 homing_->cancel();
         }
-        // Decelerate at HALF the configured acceleration: gentler than the
-        // move's own decel so a jog cancel coasts out instead of clunking. A
-        // zero accel (no-ramp config) leaves nothing to halve → hard stop.
-        const uint32_t decel = resolvedAccelSps2_ / 2u;
+        // Decelerate at a QUARTER of the configured acceleration when no separate
+        // deceleration was set (the common case: a project configures only accel).
+        // Accel must be gentle for a heavy load starting from rest; the stop only
+        // needs to take the edge off the clunk, so a much steeper rampdown is fine.
+        // If a distinct decel WAS configured (resolvedDecelSps2_ != accel), honour
+        // it as-is. Zero accel (no-ramp config) leaves nothing to scale → hard stop.
+        const bool hasExplicitDecel =
+            resolvedDecelSps2_ != 0u && resolvedDecelSps2_ != resolvedAccelSps2_;
+        const uint32_t decel = hasExplicitDecel ? resolvedDecelSps2_ : (resolvedAccelSps2_ / 4u);
         const auto s = (decel > 0u) ? driver_.decelStop(decel) : driver_.stop(StopMode::Immediate);
         if (!motionInFlight_) {
                 // Nothing actually in flight — go straight to Idle (mirrors stop()).

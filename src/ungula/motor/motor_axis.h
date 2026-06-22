@@ -68,11 +68,13 @@ class MotorAxis final {
         Status moveBy(DistanceValue delta);
         Status home();
         Status stop();
-        /// Decelerate the in-flight motion to a controlled stop at HALF the
-        /// configured acceleration — a gentler rampdown than the move's own
-        /// decel, meant for cancelling a jog without slamming the mechanics.
-        /// Falls back to a hard stop when no ramp is configured or the
-        /// generator can't splice a rampdown. Use `stop()` for a forced halt.
+        /// Decelerate the in-flight motion to a controlled stop, meant for
+        /// cancelling a jog without the hard-stop clunk. Uses an explicitly
+        /// configured deceleration if one was set; otherwise a QUARTER of the
+        /// configured acceleration (accel can be gentle for a heavy load from
+        /// rest, but the stop only needs to take the edge off). Falls back to a
+        /// hard stop when no ramp is configured or the generator can't splice a
+        /// rampdown. Use `stop()` for a forced halt.
         Status softStop();
         Status emergencyStop();
 
