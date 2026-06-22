@@ -47,6 +47,19 @@ class IMotionPlanner {
         virtual PlannedMove planJog(Direction dir, uint32_t safetyCapSteps,
                                     const PlannerLimits &limits, uint32_t timerResolutionHz,
                                     uint32_t minTimerTicks) = 0;
+
+        /// Plan a decel-only ramp from `currentSps` down to zero in the
+        /// given direction. The driver splices this onto an in-flight
+        /// move for a controlled soft stop (jog cancel). Default returns
+        /// an empty move — planners that don't model a standalone stop
+        /// ramp let the generator fall back to an immediate halt.
+        virtual PlannedMove planStop(Direction /*dir*/, uint32_t /*currentSps*/,
+                                     const PlannerLimits & /*limits*/,
+                                     uint32_t /*timerResolutionHz*/,
+                                     uint32_t /*minTimerTicks*/) const
+        {
+                return PlannedMove{};
+        }
 };
 
 } // namespace ungula::motor

@@ -566,6 +566,35 @@ Status MotorAxis::stop()
         return Status::Ok();
 }
 
+Status MotorAxis::softStop()
+{
+        if (state_ == MotorState::Idle || state_ == MotorState::Disabled) {
+                return Status::Ok();
+        }
+        if (state_ != MotorState::Moving && state_ != MotorState::Jogging &&
+            state_ != MotorState::Homing && state_ != MotorState::Stopping) {
+                return Status::Err(ErrorCode::InvalidState);
+        }
+        // A soft stop during homing aborts the search the same way stop() does —
+        // the rampdown replaces the in-flight move and the strategy must not
+        // re-arm over it.
+        if (homing_ != nullptr && homing_->isActive()) {
+                homing_->cancel();
+        }
+        // Decelerate at HALF the configured acceleration: gentler than the
+        // move's own decel so a jog cancel coasts out instead of clunking. A
+        // zero accel (no-ramp config) leaves nothing to halve → hard stop.
+        const uint32_t decel = resolvedAccelSps2_ / 2u;
+        const auto s = (decel > 0u) ? driver_.decelStop(decel) : driver_.stop(StopMode::Immediate);
+        if (!motionInFlight_) {
+                // Nothing actually in flight — go straight to Idle (mirrors stop()).
+                transition(MotorState::Idle);
+        } else if (state_ != MotorState::Stopping) {
+                transition(MotorState::Stopping);
+        }
+        return s;
+}
+
 Status MotorAxis::emergencyStop()
 {
         if (homing_ != nullptr && homing_->isActive()) {

@@ -112,6 +112,7 @@ class RmtStepSignal final : public IStepSignalGenerator {
         void end() override;
         Status armMove(const PlannedMove &move) override;
         Status stop(StopMode mode) override;
+        Status armDecelStop(const PlannedMove &decelMove) override;
         StepSignalStatus status() const override;
         Position commandedPosition() const override;
         uint32_t commandedSpsNow() const override;

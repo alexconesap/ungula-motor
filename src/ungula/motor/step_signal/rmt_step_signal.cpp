@@ -80,6 +80,16 @@ namespace
                 // the calling CPU in `rmt_tx_disable`'s poll loop
                 // (interrupts disabled) → CPU IWDT panic.
                 std::atomic<bool> stopRequested{ false };
+
+                // Soft-stop handoff. `armDecelStop()` copies a decel ramp into
+                // `decelMove` (task context) then raises `decelPending`. At the
+                // NEXT step boundary the encoder repoints its expander at the
+                // ramp (velocity-continuous when the ramp starts near the
+                // current rate) and finishes there. `decelEngaged` makes the
+                // swap one-shot; both clear on the next arm / reset.
+                PlannedMove decelMove{};
+                std::atomic<bool> decelPending{ false };
+                bool decelEngaged = false;
         };
 
         inline void applySlots(StepEncoder *self, const rmtgen::SymbolSlots &s)
@@ -150,6 +160,17 @@ namespace
                                         // Cumulative counter — wraps at
                                         // UINT32_MAX, intentionally.
                                         self->stepsEmittedSinceArm.fetch_add(1u, std::memory_order_relaxed);
+                                        // A step just finished — the expander sits between
+                                        // steps, the only safe point to repoint it. If a
+                                        // soft stop is pending, switch to the decel ramp
+                                        // now; the position counter keeps running across
+                                        // the swap so commandedPosition() stays correct.
+                                        if (!self->decelEngaged &&
+                                            self->decelPending.load(std::memory_order_acquire)) {
+                                                self->move = self->decelMove;
+                                                self->expander.reset(self->move);
+                                                self->decelEngaged = true;
+                                        }
                                 }
                                 // Fetch the next symbol; if the move is done,
                                 // loadNextSymbol clears symbolReady and the loop
@@ -198,6 +219,8 @@ namespace
                 self->currentStepCompletes = false;
                 self->stepsEmittedSinceArm.store(0u, std::memory_order_relaxed);
                 self->stopRequested.store(false, std::memory_order_relaxed);
+                self->decelPending.store(false, std::memory_order_relaxed);
+                self->decelEngaged = false;
                 return ESP_OK;
         }
 
@@ -536,6 +559,33 @@ Status RmtStepSignal::stop(StopMode mode)
         return Status::Ok();
 }
 
+Status RmtStepSignal::armDecelStop(const PlannedMove &decelMove)
+{
+        if (!begun_ || encoder_ == nullptr) {
+                return Status::Err(ErrorCode::NotInitialized);
+        }
+        // Nothing in flight — there is no cruise to splice a rampdown onto.
+        // The caller (driver) is expected to have already routed the "already
+        // stopped" case elsewhere; report it so it can hard-stop if it wants.
+        if (!running_.load(std::memory_order_acquire)) {
+                return Status::Err(ErrorCode::InvalidState);
+        }
+        if (decelMove.segmentCount == 0 || decelMove.totalSteps == 0) {
+                return Status::Err(ErrorCode::InvalidConfig);
+        }
+
+        auto *stepEnc = __containerof(static_cast<rmt_encoder_t *>(encoder_), StepEncoder, base);
+        // Publish the ramp BEFORE raising the flag: the encoder reads
+        // `decelPending` with acquire, so once it sees the flag the whole
+        // `decelMove` write is visible (release/acquire publish of plain data).
+        // The running transmission keeps going; at its next step boundary the
+        // encoder repoints the expander at this ramp and rides it down to zero,
+        // then reports COMPLETE → on_trans_done clears `running_` normally.
+        stepEnc->decelMove = decelMove;
+        stepEnc->decelPending.store(true, std::memory_order_release);
+        return Status::Ok();
+}
+
 // =====================================================================
 // Status / position
 // =====================================================================
@@ -664,6 +714,10 @@ Status RmtStepSignal::armMove(const PlannedMove &)
         return Status::Err(ErrorCode::Unsupported);
 }
 Status RmtStepSignal::stop(StopMode)
+{
+        return Status::Err(ErrorCode::Unsupported);
+}
+Status RmtStepSignal::armDecelStop(const PlannedMove &)
 {
         return Status::Err(ErrorCode::Unsupported);
 }

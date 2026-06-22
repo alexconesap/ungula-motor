@@ -132,6 +132,7 @@ Status GenericStepDirDriver::armMove(Direction dir, uint32_t targetSteps, uint32
         L.minPulseHighUs = cfg_.minPulseHighUs;
         L.minPulseLowUs  = cfg_.minPulseLowUs;
 
+        lastDir_ = dir;
         const Position from = stepSignal_.commandedPosition();
         const Position to = (dir == Direction::Forward) ? from + static_cast<int32_t>(targetSteps) :
                                                           from - static_cast<int32_t>(targetSteps);
@@ -171,6 +172,7 @@ Status GenericStepDirDriver::armJog(Direction dir, uint32_t cruiseSps, uint32_t 
         L.minPulseHighUs = cfg_.minPulseHighUs;
         L.minPulseLowUs  = cfg_.minPulseLowUs;
 
+        lastDir_ = dir;
         constexpr uint32_t kJogIndefiniteSteps = 0x7FFFFFFFu;
         lastPlannedMove_ = planner_.planJog(dir, kJogIndefiniteSteps, L,
                                             stepSignal_.timerResolutionHz(),
@@ -198,6 +200,41 @@ Status GenericStepDirDriver::stop(StopMode mode)
                 onMotionStopped();
         }
         return s;
+}
+
+Status GenericStepDirDriver::decelStop(uint32_t decelSps2)
+{
+        if (!begun_) {
+                return Status::Err(ErrorCode::NotInitialized);
+        }
+        // A zero decel ("no ramp"), or no live motion to ramp down, leaves
+        // nothing to plan — hard-halt instead. `stop()` clears motionInFlight_
+        // and runs the onMotionStopped hook.
+        const uint32_t curSps = stepSignal_.commandedSpsNow();
+        if (decelSps2 == 0u || curSps == 0u) {
+                return stop(StopMode::Immediate);
+        }
+
+        PlannerLimits L;
+        L.maxVelocitySps = curSps;
+        L.accelSpsPerSec = decelSps2;
+        L.decelSpsPerSec = decelSps2;
+        L.hardStepRateCeilingSps = curSps;
+        L.minPulseHighUs = cfg_.minPulseHighUs;
+        L.minPulseLowUs  = cfg_.minPulseLowUs;
+
+        lastPlannedMove_ = planner_.planStop(lastDir_, curSps, L, stepSignal_.timerResolutionHz(),
+                                             stepSignal_.minTimerTicks());
+        if (lastPlannedMove_.totalSteps == 0u) {
+                // Too slow to build a meaningful ramp (sub-step stop distance) —
+                // just halt; the perceptible "clunk" is negligible at this rate.
+                return stop(StopMode::Immediate);
+        }
+
+        // Splice the ramp onto the running transmission. motionInFlight_ stays
+        // true: the decel IS motion. The generator clears `running_` when the
+        // ramp finishes; motionStatus() then fires onMotionStopped().
+        return stepSignal_.armDecelStop(lastPlannedMove_);
 }
 
 DriverMotionStatus GenericStepDirDriver::motionStatus() const

@@ -66,6 +66,18 @@ class IStepSignalGenerator {
         /// drops pulses on the next ISR fire (sub-µs latency).
         virtual Status stop(StopMode mode) = 0;
 
+        /// Splice a precomputed decel ramp onto the in-flight move so the
+        /// motor coasts to a controlled stop instead of cutting pulses
+        /// dead. `decelMove` MUST start near the current step rate for a
+        /// seamless (velocity-continuous) handoff. The move is consumed
+        /// like any other plan; motion finishes when the ramp runs out.
+        /// Generators that can't repoint a running transmission fall back
+        /// to an immediate halt — callers get a hard stop, never a no-op.
+        virtual Status armDecelStop(const PlannedMove & /*decelMove*/)
+        {
+                return stop(StopMode::Immediate);
+        }
+
         /// Current motion status. Polled by the axis every service tick.
         virtual StepSignalStatus status() const = 0;
 

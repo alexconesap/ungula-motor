@@ -44,7 +44,7 @@ class TrapezoidalPlanner final : public IMotionPlanner {
         /// when `stop(Decelerate)` swaps the in-flight move for a
         /// controlled rampdown.
         PlannedMove planStop(Direction dir, uint32_t currentSps, const PlannerLimits &limits,
-                             uint32_t timerResolutionHz, uint32_t minTimerTicks) const;
+                             uint32_t timerResolutionHz, uint32_t minTimerTicks) const override;
 
         /// Returns the actual step rate the planner will emit when the
         /// host asks for `requestedSps` at a generator running at

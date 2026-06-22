@@ -73,6 +73,15 @@ class IMotorDriver {
         virtual Status armJog(Direction dir, uint32_t cruiseSps, uint32_t accelSps2) = 0;
         virtual Status stop(StopMode mode) = 0;
 
+        /// Decelerate an in-flight move to a controlled stop at `decelSps2`
+        /// (steps/s²) instead of cutting motion dead. Used for a soft jog
+        /// cancel. Drivers without a decel-capable pulse generator fall
+        /// back to an immediate halt, so the caller always gets a stop.
+        virtual Status decelStop(uint32_t /*decelSps2*/)
+        {
+                return stop(StopMode::Immediate);
+        }
+
         // ---- Status (polled from service tick) ---------------------------
         virtual DriverMotionStatus motionStatus() const = 0;
         virtual Position commandedPositionSteps() const = 0;

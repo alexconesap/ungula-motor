@@ -664,6 +664,7 @@ Status Tmc2209Driver::armMove(Direction dir, uint32_t targetSteps, uint32_t crui
         L.minPulseHighUs = cfg_.minPulseHighUs;
         L.minPulseLowUs  = cfg_.minPulseLowUs;
 
+        lastDir_ = dir;
         const Position from = stepSignal_.commandedPosition();
         const Position to = (dir == Direction::Forward) ? from + static_cast<int32_t>(targetSteps) :
                                                           from - static_cast<int32_t>(targetSteps);
@@ -693,6 +694,7 @@ Status Tmc2209Driver::armJog(Direction dir, uint32_t cruiseSps, uint32_t accelSp
         L.minPulseHighUs = cfg_.minPulseHighUs;
         L.minPulseLowUs  = cfg_.minPulseLowUs;
 
+        lastDir_ = dir;
         // Practically-infinite jog cap (~2.1 G steps; at 200 kpps ≈ 3 h).
         constexpr uint32_t kJogIndefiniteSteps = 0x7FFFFFFFu;
         lastPlannedMove_ = planner_.planJog(dir, kJogIndefiniteSteps, L,
@@ -710,6 +712,37 @@ Status Tmc2209Driver::stop(StopMode mode)
                 return Status::Err(ErrorCode::NotInitialized);
         }
         return stepSignal_.stop(mode);
+}
+
+Status Tmc2209Driver::decelStop(uint32_t decelSps2)
+{
+        if (!begun_) {
+                return Status::Err(ErrorCode::NotInitialized);
+        }
+        // A zero decel ("no ramp"), or no live motion to ramp down, leaves
+        // nothing to plan — hard-halt instead.
+        const uint32_t curSps = stepSignal_.commandedSpsNow();
+        if (decelSps2 == 0u || curSps == 0u) {
+                return stepSignal_.stop(StopMode::Immediate);
+        }
+
+        PlannerLimits L;
+        L.maxVelocitySps = curSps;
+        L.accelSpsPerSec = decelSps2;
+        L.decelSpsPerSec = decelSps2;
+        L.hardStepRateCeilingSps = curSps;
+        L.minPulseHighUs = cfg_.minPulseHighUs;
+        L.minPulseLowUs  = cfg_.minPulseLowUs;
+
+        lastPlannedMove_ = planner_.planStop(lastDir_, curSps, L, stepSignal_.timerResolutionHz(),
+                                             stepSignal_.minTimerTicks());
+        if (lastPlannedMove_.totalSteps == 0u) {
+                // Too slow to build a meaningful ramp — just halt.
+                return stepSignal_.stop(StopMode::Immediate);
+        }
+        // Splice the ramp onto the running transmission; motion finishes when
+        // the ramp runs out (on_trans_done clears running_).
+        return stepSignal_.armDecelStop(lastPlannedMove_);
 }
 
 DriverMotionStatus Tmc2209Driver::motionStatus() const

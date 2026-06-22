@@ -96,6 +96,7 @@ class Tmc2209Driver final : public IMotorDriver {
                        uint32_t decelSps2) override;
         Status armJog(Direction dir, uint32_t cruiseSps, uint32_t accelSps2) override;
         Status stop(StopMode mode) override;
+        Status decelStop(uint32_t decelSps2) override;
 
         DriverMotionStatus motionStatus() const override;
         Position commandedPositionSteps() const override;
@@ -232,6 +233,9 @@ class Tmc2209Driver final : public IMotorDriver {
 
         // Bookkeeping for diagnostics.
         mutable PlannedMove lastPlannedMove_{};
+        // Direction of the in-flight move — the decel ramp for a soft stop
+        // must continue in the same direction.
+        Direction lastDir_ = Direction::Forward;
         bool begun_ = false;
 };
 
