@@ -733,6 +733,15 @@ void MotorAxis::pumpLimits(int64_t nowMs)
                 // TravelLimit path uses a few lines below.
                 limits_->notifyMotionEnd();
                 lastStopReason_ = StopReason::StallDetected;
+                // While HOMING, a stall is the EXPECTED home trigger, not a
+                // fault: a sensorless strategy drives into the hard stop on
+                // purpose. Consume the latch and stop the motion bookkeeping,
+                // but stay in Homing so the strategy's tick sees motion ended
+                // with StallDetected and reports success. Faulting here makes
+                // every stall-homed axis fail to home.
+                if (state_ == MotorState::Homing) {
+                        return;
+                }
                 lastFault_ = FaultCode::Stall;
                 if (state_ != MotorState::Faulted) {
                         transition(MotorState::Faulted);
