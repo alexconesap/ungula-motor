@@ -314,6 +314,68 @@ TEST(MotorAxisFsm, StallLatchTransitionsToFaulted)
         EXPECT_EQ(axis.lastStopReason(), StopReason::StallDetected);
 }
 
+// ---- StallPolicy::AcceptAsEnd ---------------------------------------
+// A machine whose end of travel is a mechanical hard stop (no limit
+// switch) must be able to run INTO it without latching a fault.
+
+TEST(MotorAxisFsm, StallWithAcceptAsEndCompletesMotionInsteadOfFaulting)
+{
+        FakeMotorDriver drv;
+        FakeLimitSystem limits;
+        MotorAxis axis(makeConfig(), drv, &limits);
+        ASSERT_TRUE(axis.begin().ok());
+        ASSERT_TRUE(axis.enable().ok());
+        ASSERT_TRUE(axis.moveForward(StallPolicy::AcceptAsEnd).ok());
+
+        limits.stallActive = true;
+        axis.service(10);
+        EXPECT_EQ(axis.state(), MotorState::Idle);
+        EXPECT_EQ(axis.lastStopReason(), StopReason::StallDetected);
+}
+
+TEST(MotorAxisFsm, AcceptAsEndDoesNotLeakIntoTheNextMove)
+{
+        FakeMotorDriver drv;
+        FakeLimitSystem limits;
+        MotorAxis axis(makeConfig(), drv, &limits);
+        ASSERT_TRUE(axis.begin().ok());
+        ASSERT_TRUE(axis.enable().ok());
+
+        // First move tolerates the hard stop and ends cleanly.
+        ASSERT_TRUE(axis.moveForward(StallPolicy::AcceptAsEnd).ok());
+        limits.stallActive = true;
+        axis.service(10);
+        ASSERT_EQ(axis.state(), MotorState::Idle);
+
+        // The NEXT move did not opt in — a stall there is a real jam and
+        // must fault. A leaked policy would silently swallow it.
+        limits.stallActive = false;
+        ASSERT_TRUE(axis.moveForward().ok());
+        limits.stallActive = true;
+        axis.service(20);
+        EXPECT_EQ(axis.state(), MotorState::Faulted);
+        EXPECT_EQ(axis.lastStopReason(), StopReason::StallDetected);
+}
+
+TEST(MotorAxisFsm, BoundedMoveWithAcceptAsEndStillCompletesOnTargetReached)
+{
+        FakeMotorDriver drv;
+        FakeLimitSystem limits;
+        MotorAxis axis(makeConfig(), drv, &limits);
+        ASSERT_TRUE(axis.begin().ok());
+        ASSERT_TRUE(axis.enable().ok());
+
+        // "Travel at most this far, but stop early if you hit the end."
+        // No stall here: the distance target is what finishes the move, and
+        // the reason must say so, so the host can tell the two apart.
+        ASSERT_TRUE(axis.moveBy(DistanceValue::steps(100), StallPolicy::AcceptAsEnd).ok());
+        drv.running = false; // planner ran to completion
+        drv.finishedReason = StopReason::TargetReached;
+        axis.service(10);
+        EXPECT_EQ(axis.state(), MotorState::Idle);
+        EXPECT_EQ(axis.lastStopReason(), StopReason::TargetReached);
+}
+
 // =====================================================================
 // Fault recovery
 // =====================================================================

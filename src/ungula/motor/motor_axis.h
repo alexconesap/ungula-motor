@@ -62,10 +62,25 @@ class MotorAxis final {
         Status clearFault();
 
         // ---- Motion ------------------------------------------------------
-        Status moveForward();
-        Status moveBackward();
-        Status moveTo(DistanceValue target);
-        Status moveBy(DistanceValue delta);
+        //
+        // Every motion verb takes an optional `StallPolicy`. The default
+        // (`Fault`) is the historical behaviour: a stall aborts the move and
+        // faults the axis. Pass `StallPolicy::AcceptAsEnd` when the move is
+        // SUPPOSED to end by hitting something — a run into a mechanical hard
+        // stop on a machine with no limit switch. The move then finishes with
+        // `StopReason::StallDetected` and the axis lands in `Idle`, not
+        // `Faulted`.
+        //
+        // `moveBy` / `moveTo` with `AcceptAsEnd` give the "travel AT MOST this
+        // far, but stop early if you hit the end" primitive: the planner target
+        // bounds the motion, the stall terminates it, and whichever comes first
+        // wins. Check `lastStopReason()` to see which did:
+        //   TargetReached  → the full distance was travelled
+        //   StallDetected  → the hard stop arrived first
+        Status moveForward(StallPolicy stall = StallPolicy::Fault);
+        Status moveBackward(StallPolicy stall = StallPolicy::Fault);
+        Status moveTo(DistanceValue target, StallPolicy stall = StallPolicy::Fault);
+        Status moveBy(DistanceValue delta, StallPolicy stall = StallPolicy::Fault);
         Status home();
         Status stop();
         /// Decelerate the in-flight motion to a controlled stop, meant for
@@ -157,8 +172,8 @@ class MotorAxis final {
         MotionProfile activeProfile_;
         MotorIntent activeIntent_ = MotorIntent::Default;
 
-        Status armMove(Direction dir, uint32_t targetSteps);
-        Status armJog(Direction dir);
+        Status armMove(Direction dir, uint32_t targetSteps, StallPolicy stall);
+        Status armJog(Direction dir, StallPolicy stall);
 
         void applyIntentToDriver();
         void emit(MotorEventType type, StopReason reason = StopReason::None,
@@ -183,6 +198,10 @@ class MotorAxis final {
         FaultCode lastFault_ = FaultCode::None;
         Direction activeDirection_ = Direction::Forward;
         bool motionInFlight_ = false;
+        // What a stall means for the move currently in flight. Reset to
+        // Fault whenever a motion ends, so it can never leak into the next
+        // command (a stale AcceptAsEnd would silently swallow a real jam).
+        StallPolicy activeStallPolicy_ = StallPolicy::Fault;
         bool homed_ = false;
 
         IMotorEventListener *listener_ = nullptr;

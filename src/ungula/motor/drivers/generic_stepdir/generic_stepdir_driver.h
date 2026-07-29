@@ -92,6 +92,16 @@ class GenericStepDirDriver : public IMotorDriver {
                 return &stepSignal_;
         }
 
+        /// True when the active step signal generator is DMA-fed. Valid
+        /// only after `begin()`. Hosts log this at setup: on a DMA-capable
+        /// part a `false` here means the axis fell to the CPU refill path
+        /// and will glitch its step train at high rates — a condition
+        /// nothing else reports, because the axis is otherwise healthy.
+        bool stepSignalUsingDma() const
+        {
+                return stepSignal_.usingDma();
+        }
+
     protected:
         /// Hook for subclasses (e.g. `YpmcStepDirDriver`) that need to
         /// write extra pins (secondary DIR, etc.) before the step

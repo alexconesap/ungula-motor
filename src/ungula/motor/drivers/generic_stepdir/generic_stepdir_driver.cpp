@@ -34,6 +34,10 @@ namespace
                 if (cfg.resolutionHz != 0u) {
                         rcfg.resolutionHz = cfg.resolutionHz;
                 }
+                rcfg.useDma = cfg.useDma;
+                if (cfg.dmaBufferSymbols != 0u) {
+                        rcfg.dmaBufferSymbols = cfg.dmaBufferSymbols;
+                }
                 return rcfg;
         }
 } // namespace

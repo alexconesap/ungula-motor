@@ -15,6 +15,8 @@
 #include <driver/rmt_types.h>
 #include <esp_attr.h>
 #include <esp_err.h>
+#include <hal/dma_types.h>
+#include <soc/soc_caps.h>
 
 #include "ungula/core/time/time.h"
 #include "ungula/hal/gpio/gpio.h"
@@ -24,6 +26,26 @@ namespace ungula::motor
 {
 
 namespace gpio = ungula::hal::gpio;
+
+#if SOC_RMT_SUPPORT_DMA
+namespace
+{
+        // Bounds on Config::dmaBufferSymbols, both enforced by the IDF driver
+        // and both worth catching here so a bad value fails as InvalidConfig
+        // instead of an opaque DriverFault.
+        //
+        // Floor: rmt_new_tx_channel rejects anything below one hardware block.
+        // Ceiling: the buffer is split across two GDMA descriptors and one
+        // descriptor carries at most DMA_DESCRIPTOR_BUFFER_MAX_SIZE bytes, so
+        // the whole buffer tops out at 2 * 4095 / 4 symbols, rounded down to
+        // even (the driver also requires an even count).
+        constexpr uint32_t kMinDmaBufferSymbols = static_cast<uint32_t>(SOC_RMT_MEM_WORDS_PER_CHANNEL);
+        constexpr uint32_t kMaxDmaBufferSymbols =
+            (2u * static_cast<uint32_t>(DMA_DESCRIPTOR_BUFFER_MAX_SIZE) /
+             static_cast<uint32_t>(sizeof(rmt_symbol_word_t))) &
+            ~1u;
+} // namespace
+#endif
 
 // =====================================================================
 // Custom RMT encoder — walks a PlannedMove's segments and emits one
@@ -317,12 +339,41 @@ Status RmtStepSignal::begin(uint8_t stepPin, uint8_t dirPin, bool dirActiveHigh,
         txCfg.mem_block_symbols = cfg_.memBlockSymbols;
         txCfg.trans_queue_depth = cfg_.transQueueDepth;
         txCfg.flags.invert_out = 0;
-        txCfg.flags.with_dma = 0; // small payloads, no DMA needed
+
+        // Feed mode. Without DMA an ISR refills the channel's hardware buffer,
+        // so a 64-symbol block at 500 kSPS means a refill every 128 us for the
+        // whole move — anything that delays that ISR (WiFi on core 0, a flash
+        // cache miss) starves the channel and the step train glitches. With DMA
+        // mem_block_symbols becomes a RAM ping-pong buffer and GDMA does the
+        // feeding; the CPU only has to refill one half while the other plays.
+        bool wantDma = cfg_.useDma;
+#if SOC_RMT_SUPPORT_DMA
+        if (wantDma) {
+                if ((cfg_.dmaBufferSymbols & 1u) != 0u ||
+                    cfg_.dmaBufferSymbols < kMinDmaBufferSymbols ||
+                    cfg_.dmaBufferSymbols > kMaxDmaBufferSymbols) {
+                        return Status::Err(ErrorCode::InvalidConfig);
+                }
+                txCfg.mem_block_symbols = cfg_.dmaBufferSymbols;
+        }
+#else
+        // Classic ESP32: the peripheral has no DMA at all, and asking for it
+        // makes rmt_new_tx_channel return ESP_ERR_NOT_SUPPORTED. Drop the
+        // request so one host config builds for both chips.
+        wantDma = false;
+#endif
+        txCfg.flags.with_dma = wantDma ? 1u : 0u;
         txCfg.flags.io_loop_back = 0;
         txCfg.flags.io_od_mode = 0;
 
         rmt_channel_handle_t channel = nullptr;
         if (rmt_new_tx_channel(&txCfg, &channel) != ESP_OK || channel == nullptr) {
+                // Deliberately no retry without DMA. Only the last TX channel of
+                // a group is DMA-capable, so this fails when another axis got
+                // there first — and a silent fallback to the CPU refill path
+                // would only surface later as a glitched step train at full
+                // speed. Fix the allocation order instead: begin() the DMA axis
+                // before the others.
                 return Status::Err(ErrorCode::DriverFault);
         }
 
@@ -368,6 +419,7 @@ Status RmtStepSignal::begin(uint8_t stepPin, uint8_t dirPin, bool dirActiveHigh,
 
         channel_ = channel;
         encoder_ = encoderHandle;
+        usingDma_ = wantDma;
         begun_ = true;
         return Status::Ok();
 }
@@ -390,6 +442,7 @@ void RmtStepSignal::end()
                 encoder_ = nullptr;
         }
         begun_ = false;
+        usingDma_ = false;
         running_.store(false, std::memory_order_release);
         faulted_.store(false, std::memory_order_release);
         pendingSegments_.store(0, std::memory_order_release);

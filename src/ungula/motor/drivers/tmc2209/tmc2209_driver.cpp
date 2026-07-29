@@ -69,6 +69,28 @@ namespace
         constexpr uint8_t kCoolConfSemaxMarginDef = 2;
         constexpr uint32_t kTcoolthrsAlwaysOn = 0xFFFFFu;
 
+        // TMC2209 internal oscillator (datasheet 3.1). TSTEP is measured in
+        // these clocks, so it is what converts a step rate into a TCOOLTHRS.
+        constexpr uint32_t kInternalClockHz = 12000000u;
+
+        /// TCOOLTHRS for a minimum STEP rate. StallGuard is active while
+        /// `TSTEP < TCOOLTHRS`, and TSTEP is the clocks between 1/256 microsteps:
+        ///
+        ///     TSTEP = fCLK / (stepRate * 256 / microsteps)
+        ///
+        /// so the threshold IS the TSTEP at the slowest speed we still trust.
+        /// Returns "always on" for a rate of 0 (the historical behaviour).
+        uint32_t tcoolthrsForMinStepRate(uint32_t sps, uint32_t microsteps)
+        {
+                if (sps == 0u || microsteps == 0u) {
+                        return kTcoolthrsAlwaysOn;
+                }
+                const uint64_t num = static_cast<uint64_t>(kInternalClockHz) * microsteps;
+                const uint64_t den = static_cast<uint64_t>(sps) * 256u;
+                const uint64_t v = num / den;
+                return (v >= kTcoolthrsAlwaysOn) ? kTcoolthrsAlwaysOn : static_cast<uint32_t>(v);
+        }
+
         // Current-conversion constants (TMC datasheet §9.1 / §5.5.1).
         constexpr float kVfsLow = 0.325f;
         constexpr float kVfsHigh = 0.180f;
@@ -357,6 +379,42 @@ Status Tmc2209Driver::writeIholdIrun()
         return writeRegister(kRegIholdIrun, packIholdIrun(holdCs, runCs, 1));
 }
 
+Status Tmc2209Driver::setStallSensitivity(StallSensitivity sensitivity)
+{
+        if (!begun_) {
+                return Status::Err(ErrorCode::NotInitialized);
+        }
+        cfg_.stallSensitivity = sensitivity;
+        if (cfg_.diagPin == GPIO_NONE) {
+                return Status::Ok(); // no DIAG wired — nothing to arm
+        }
+        if (intentSpreadCycle()) {
+                return Status::Err(ErrorCode::InvalidConfig);
+        }
+        // Only SGTHRS changes here — the velocity gate has its own setter.
+        const uint8_t sgthrs = cfg_.stallSensitivity.toSgthrsByte();
+        cachedSgthrs_ = sgthrs;
+        return writeRegister(kRegSgthrs, sgthrs);
+}
+
+Status Tmc2209Driver::setStallMinStepRate(uint32_t sps)
+{
+        if (!begun_) {
+                return Status::Err(ErrorCode::NotInitialized);
+        }
+        cfg_.stallMinStepRateSps = sps;
+        if (cfg_.diagPin == GPIO_NONE) {
+                return Status::Ok(); // no DIAG wired — nothing to gate
+        }
+
+        const uint32_t tcool = tcoolthrsForMinStepRate(sps, microstepMultiplier(cfg_.microsteps));
+        if (tcool == cachedTcoolthrs_) {
+                return Status::Ok(); // unchanged — skip the datagram
+        }
+        cachedTcoolthrs_ = tcool;
+        return writeRegister(kRegTcoolthrs, tcool);
+}
+
 Status Tmc2209Driver::writeStallConfig()
 {
         if (cfg_.diagPin == GPIO_NONE) {
@@ -387,8 +445,12 @@ Status Tmc2209Driver::writeStallConfig()
         // TCOOLTHRS = 0xFFFFF: keep StallGuard armed at any non-zero
         // velocity. The lib does its own arm-window debounce on the
         // task side.
-        cachedTcoolthrs_ = kTcoolthrsAlwaysOn;
-        return writeRegister(kRegTcoolthrs, kTcoolthrsAlwaysOn);
+        // Gate StallGuard on a minimum velocity. Without this every bounded
+        // move false-trips on its own deceleration ramp.
+        const uint32_t tcool =
+            tcoolthrsForMinStepRate(cfg_.stallMinStepRateSps, microstepMultiplier(cfg_.microsteps));
+        cachedTcoolthrs_ = tcool;
+        return writeRegister(kRegTcoolthrs, tcool);
 }
 
 Status Tmc2209Driver::writePwmconf()

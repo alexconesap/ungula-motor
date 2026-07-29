@@ -50,6 +50,32 @@ inline const char *motorStateToString(MotorState s)
         return "Unknown";
 }
 
+/// What a stall means for the motion currently being armed.
+///
+/// StallGuard cannot tell "the carriage reached its mechanical hard
+/// stop" from "something jammed the carriage" — both are just a load
+/// spike on DIAG. Only the CALLER knows which one it expects, so the
+/// caller declares it per move.
+///
+/// - `Fault` (default, historical behaviour): a stall aborts the move
+///   and faults the axis. Correct for any move that should complete
+///   without touching anything.
+/// - `AcceptAsEnd`: a stall is a legitimate way for THIS move to
+///   finish. Motion ends with `StopReason::StallDetected` and the axis
+///   returns to `Idle` instead of `Faulted`. This is what a
+///   "run until the hard stop" move needs — a sensorless home, or a
+///   travel-to-end-of-stroke pass on a machine with no limit switches.
+///
+/// `AcceptAsEnd` only stops the LIBRARY from faulting. It does not
+/// claim the stall happened where you wanted it: a host that knows its
+/// stroke length should still check the end position and raise its own
+/// obstruction error if the stall came early. The library has no way to
+/// know what "early" means.
+enum class StallPolicy : uint8_t {
+        Fault = 0,
+        AcceptAsEnd,
+};
+
 /// Why a motion stopped. Reported by the driver / limit system, surfaced
 /// via `lastStopReason()` and on `MotionStopped` / `MotionCompleted`
 /// events.

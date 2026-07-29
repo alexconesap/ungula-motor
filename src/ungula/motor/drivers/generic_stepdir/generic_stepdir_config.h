@@ -58,6 +58,24 @@ struct GenericStepDirConfig {
         /// split). For Wendy-class motion (≤ 500 kSPS) 10 MHz is
         /// comfortable and produces honest speed reporting.
         uint32_t resolutionHz = 1'000'000u;
+
+        /// Ask the owned step signal generator to be fed by DMA rather
+        /// than a CPU refill ISR. Used ONLY by the self-owns
+        /// constructor; pluggable mode ignores it (the host configured
+        /// its own generator).
+        ///
+        /// Set this on any axis that sustains a high step rate — it is
+        /// what keeps the STEP train immune to interrupt latency. Only
+        /// one axis per RMT group can have it, and only on parts with
+        /// `SOC_RMT_SUPPORT_DMA`; see `RmtStepSignal::Config::useDma`
+        /// for the constraints and for why `begin()` fails rather than
+        /// falling back.
+        bool useDma = false;
+        /// DMA ping-pong buffer size in symbols, forwarded to
+        /// `RmtStepSignal::Config::dmaBufferSymbols`. Only read when
+        /// `useDma` is set. The default gives a ~1 ms refill deadline
+        /// at 500 kSPS.
+        uint32_t dmaBufferSymbols = 1024u;
 };
 
 } // namespace ungula::motor::stepdir

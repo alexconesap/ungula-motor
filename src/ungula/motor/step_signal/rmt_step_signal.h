@@ -36,6 +36,22 @@ namespace ungula::motor
 /// practice 250–500 kSPS is comfortable; higher is achievable with
 /// careful symbol buffer sizing.
 ///
+/// **"No ISR involvement" is per-pulse, not per-move.** Read it
+/// carefully before trusting it at high rates: without DMA the CPU
+/// still has to refill the channel's hardware buffer between blocks.
+/// At 500 kSPS a 64-symbol block is a refill every 128 µs, sustained
+/// for the whole move, and a delayed refill starves the channel and
+/// glitches the step train. Raising `memBlockSymbols` buys headroom;
+/// real immunity needs DMA.
+///
+/// On parts with `SOC_RMT_SUPPORT_DMA` (ESP32-S3/C6/H2) set
+/// `Config::useDma`. The GDMA engine then feeds the peripheral out of
+/// a RAM ping-pong buffer, and the CPU only has to refill one half
+/// while the other transmits — at 500 kSPS with the default 1024-symbol
+/// buffer that deadline is ~1 ms instead of 128 µs. The classic ESP32
+/// has no DMA-capable RMT, so the flag is ignored there and the CPU
+/// refill path stands.
+///
 /// ## Operating model
 ///
 /// Each `PlannedMove` segment is queued as one RMT transmission with
@@ -90,6 +106,15 @@ class RmtStepSignal final : public IStepSignalGenerator {
                 /// Symbols held in the RMT channel's hardware buffer.
                 /// 64 is the ESP-IDF default; bump for very long
                 /// segments if you see encoder underruns.
+                ///
+                /// Granularity is per-target and the driver rounds UP:
+                /// blocks are 64 symbols on the classic ESP32 but 48 on
+                /// the ESP32-S3, so 64 there costs 2 of the 4 TX blocks.
+                /// Budget this when a target drives more than one RMT
+                /// axis — the S3 has half the channels of the ESP32.
+                ///
+                /// Ignored when `useDma` is set; `dmaBufferSymbols`
+                /// sizes the channel then.
                 uint32_t memBlockSymbols = 64u;
                 /// Transmissions the queue can hold without
                 /// blocking. The planner emits ≤32 segments per move
@@ -97,6 +122,47 @@ class RmtStepSignal final : public IStepSignalGenerator {
                 /// is enough to queue a full move upfront and let the
                 /// hardware chain them.
                 uint32_t transQueueDepth = 32u;
+
+                /// Let GDMA feed the channel instead of a CPU refill
+                /// ISR. Requires `SOC_RMT_SUPPORT_DMA`; on a part
+                /// without it (classic ESP32) the flag is ignored and
+                /// the channel is allocated CPU-refilled as before, so
+                /// the same host config compiles and runs on both.
+                ///
+                /// Two hardware constraints ride along:
+                ///
+                ///   - Only the LAST TX channel of a group is
+                ///     DMA-capable, so at most ONE axis per group gets
+                ///     DMA. Give it to the fastest axis and `begin()`
+                ///     that one first, before slower channels claim
+                ///     memory blocks.
+                ///   - On a DMA-capable part, if the DMA channel cannot
+                ///     be allocated, `begin()` returns `DriverFault`. It
+                ///     does NOT retry without DMA: a silent fallback to
+                ///     the CPU refill path is the exact failure this
+                ///     flag exists to prevent, and it would only show up
+                ///     later as a glitched step train at full speed.
+                ///     Check `usingDma()` if the host wants to log it.
+                bool useDma = false;
+                /// Size of the DMA ping-pong buffer, in symbols. Read
+                /// instead of `memBlockSymbols` when `useDma` is set.
+                ///
+                /// The driver halves it: one half transmits while the
+                /// encoder refills the other, so the refill deadline is
+                /// `dmaBufferSymbols / 2` steps. 1024 at 500 kSPS is
+                /// ~1 ms, against 128 µs for a 64-symbol hardware block.
+                ///
+                /// Must be even, at least `SOC_RMT_MEM_WORDS_PER_CHANNEL`
+                /// (48 on the S3) and at most 2046 — one GDMA descriptor
+                /// carries half the buffer and tops out at 4095 bytes.
+                /// Costs 4 bytes of internal DMA-capable RAM per symbol.
+                ///
+                /// What a big buffer costs: the encoder runs up to
+                /// `dmaBufferSymbols` steps ahead of the STEP pin, so an
+                /// abrupt `stop()` overshoots `commandedPosition()` by up
+                /// to that many steps. A natural completion or a decel
+                /// stop is exact — they drain the buffer.
+                uint32_t dmaBufferSymbols = 1024u;
         };
 
         RmtStepSignal();
@@ -132,6 +198,17 @@ class RmtStepSignal final : public IStepSignalGenerator {
                 return 1u;
         }
 
+        /// True when the channel opened by `begin()` is actually fed by
+        /// GDMA. False before `begin()`, on a part without
+        /// `SOC_RMT_SUPPORT_DMA`, and whenever `Config::useDma` was not
+        /// asked for. Hosts that care should log this at setup — it is
+        /// the only way to tell a DMA channel from a CPU-refilled one
+        /// short of a scope.
+        bool usingDma() const override
+        {
+                return usingDma_;
+        }
+
     private:
         Config cfg_;
 
@@ -150,6 +227,7 @@ class RmtStepSignal final : public IStepSignalGenerator {
         uint32_t minPulseHighUs_ = timing::kDefaultMinPulseHighUs;
         uint32_t minPulseLowUs_  = timing::kDefaultMinPulseLowUs;
         bool begun_ = false;
+        bool usingDma_ = false;
 
         // Motion state shared with the on_trans_done ISR callback.
         std::atomic<bool> running_{ false };

@@ -106,6 +106,19 @@ class IStepSignalGenerator {
         /// Minimum timer ticks per half-period the generator can
         /// honour. Planner uses this as a floor to clamp peak velocity.
         virtual uint32_t minTimerTicks() const = 0;
+
+        /// True when the step train is fed by DMA rather than a CPU
+        /// refill ISR. Default `false` — only `RmtStepSignal` on a part
+        /// with `SOC_RMT_SUPPORT_DMA`, configured for it, returns true.
+        ///
+        /// Hosts should log this after `begin()` on any axis that
+        /// sustains a high step rate. A `false` where DMA was expected
+        /// means the axis works but will glitch its step train under
+        /// interrupt load, which is invisible until it happens at speed.
+        virtual bool usingDma() const
+        {
+                return false;
+        }
 };
 
 } // namespace ungula::motor

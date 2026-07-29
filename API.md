@@ -108,14 +108,51 @@ Status clearFault();   // recover from Faulted / EmergencyStopped back
 ### Motion verbs
 
 ```cpp
-Status moveForward();              // indefinite jog, +direction
-Status moveBackward();             // indefinite jog, -direction
-Status moveTo(DistanceValue);      // absolute position target
-Status moveBy(DistanceValue);      // relative move from current position
+Status moveForward (StallPolicy = StallPolicy::Fault); // indefinite jog, +direction
+Status moveBackward(StallPolicy = StallPolicy::Fault); // indefinite jog, -direction
+Status moveTo(DistanceValue, StallPolicy = StallPolicy::Fault); // absolute target
+Status moveBy(DistanceValue, StallPolicy = StallPolicy::Fault); // relative move
 Status home();                     // run the configured homing strategy
 Status stop();                     // controlled decel
 Status emergencyStop();            // hard halt
 ```
+
+**`StallPolicy` — what a stall MEANS for this move.** StallGuard cannot tell
+"reached the mechanical hard stop" from "something jammed"; only the caller
+knows which it expects, so it is declared per move.
+
+```cpp
+enum class StallPolicy : uint8_t {
+    Fault = 0,     // default & historical: a stall aborts the move, axis -> Faulted
+    AcceptAsEnd,   // a stall is a legitimate end for THIS move, axis -> Idle
+};
+```
+
+`moveBy` / `moveTo` with `AcceptAsEnd` is the **"travel at most this far, but
+stop early if you hit the end"** primitive — the distance bounds the motion,
+the hard stop terminates it, whichever comes first wins. Read
+`lastStopReason()` to find out which did:
+
+| `lastStopReason()` | Meaning |
+| --- | --- |
+| `TargetReached` | the full commanded distance was travelled |
+| `StallDetected` | the hard stop arrived first |
+
+Use it on machines with no limit switches: a run to end-of-stroke, or a
+travel-to-hard-stop pass. Without it every such move latches a fault the host
+must clear on every cycle.
+
+The policy applies **only to the move it was armed with** — it is reset to
+`Fault` on every motion end, so a stale `AcceptAsEnd` can never leak forward and
+silently swallow a real jam.
+
+> `AcceptAsEnd` only stops the LIBRARY from faulting. It does not assert the
+> stall happened where you wanted. A host that knows its stroke length should
+> still check the end position and raise its own obstruction error when the
+> stall came early — the library cannot know what "early" means.
+
+Homing is unaffected: a stall while `state == Homing` has always been treated as
+the expected home trigger, regardless of policy.
 
 All return `Status::Err(InvalidState)` when the FSM is in a state that
 can't accept motion (Disabled, Stopping, Faulted, ...). `moveForward`
@@ -449,6 +486,15 @@ public:
     // Active generator pointer for wiring LimitSystem's ISR halt path.
     IStepSignalGenerator *stepSignalForLimits();
 
+    // Retune StallGuard4 at runtime (one SGTHRS datagram, ~1 ms; safe
+    // while moving). SG_RESULT rises with velocity, so a threshold
+    // tuned at low speed under-triggers at high speed — a host that
+    // varies speed should keep a speed→sensitivity table and call this
+    // on every speed change. Returns NotInitialized before begin() and
+    // InvalidConfig in SpreadCycle (StallGuard4 needs StealthChop).
+    Status           setStallSensitivity(StallSensitivity);
+    StallSensitivity stallSensitivity() const;
+
     // Static helpers exposed for tests / diagnostics:
     static uint8_t  milliampsToCs(uint16_t rmsMa, float rSenseOhms, bool useHighSensitivity);
     static uint16_t csToMilliamps(uint8_t cs, float rSenseOhms, bool useHighSensitivity);
@@ -654,6 +700,45 @@ RmtStepSignal({ /*resolutionHz=*/1'000'000u,
 Position counter advances live as the encoder pushes symbols; wraps
 through INT32 modular arithmetic on indefinite jogs (well-defined,
 not UB).
+
+**Turn DMA on for any axis that sustains a high step rate.** By default
+the CPU refills the channel's hardware block from an ISR — 64 symbols at
+500 kSPS is a refill every 128 µs for the whole move, and WiFi on core 0
+or a flash cache miss is enough to starve it and glitch the step train.
+On parts with `SOC_RMT_SUPPORT_DMA` (ESP32-S3/C6/H2) GDMA can feed the
+channel from a RAM ping-pong buffer instead:
+
+```cpp
+RmtStepSignal::Config cfg;
+cfg.resolutionHz = 10'000'000u;
+cfg.useDma = true;             // ignored on the classic ESP32 (no DMA-capable RMT)
+cfg.dmaBufferSymbols = 1024u;  // 512 per half → ~1 ms refill deadline at 500 kSPS
+RmtStepSignal signal(cfg);
+```
+
+Only the **last** TX channel of a group is DMA-capable, so at most one
+axis per group gets DMA — give it to the fastest one and `begin()` that
+one first. `begin()` returns `DriverFault` if the DMA channel is gone
+rather than falling back to a CPU-refilled channel, because a silent
+fallback would only surface later as a glitch at full speed.
+`usingDma()` reports what the channel actually got — it is on
+`IStepSignalGenerator` (default `false`), and hosts that own the driver
+rather than the generator read it through
+`GenericStepDirDriver::stepSignalUsingDma()`. Log it after `begin()`:
+
+```cpp
+if (!driver.stepSignalUsingDma())
+        // axis is on the CPU refill path — healthy now, glitches at speed
+```
+
+`dmaBufferSymbols`
+must be even, ≥ `SOC_RMT_MEM_WORDS_PER_CHANNEL` and ≤ 2046, else
+`InvalidConfig`.
+
+One cost worth knowing: the encoder runs up to `dmaBufferSymbols` steps
+ahead of the STEP pin, so an abrupt `stop()` leaves
+`commandedPosition()` up to that many steps past the truth. Natural
+completions and decel stops drain the buffer and stay exact.
 
 ### `GptimerStepSignal` (fallback)
 

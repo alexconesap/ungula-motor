@@ -201,6 +201,26 @@ struct Tmc2209Config {
         /// (`SGTHRS * 2`) needs to sit between those two SG_RESULT
         /// readings.
         StallSensitivity stallSensitivity = StallSensitivity::pct(kDefaultStallSensitivityPct);
+
+        /// Minimum STEP rate (pulses/s) at which StallGuard is allowed to fire.
+        /// Below it the chip's stall detector is disabled.
+        ///
+        /// WHY THIS MATTERS. StallGuard4 measures back-EMF, so `SG_RESULT` is
+        /// only meaningful while the motor is actually turning. It collapses
+        /// toward zero as velocity does — which is indistinguishable from a
+        /// stall. With detection armed at ANY velocity (the default 0), EVERY
+        /// bounded move reports a stall as it decelerates to a stop, because
+        /// the last moments of the ramp look exactly like a jam.
+        ///
+        /// The chip has the gate for this: StallGuard is only active while
+        /// `TSTEP < TCOOLTHRS`, and TSTEP grows as the motor slows. The driver
+        /// converts this field into that register (datasheet 14.2).
+        ///
+        /// 0 keeps the historical always-armed behaviour. Any host that uses
+        /// bounded moves AND stall detection wants a non-zero value here —
+        /// pick something below the slowest speed it ever commands, but well
+        /// above zero.
+        uint32_t stallMinStepRateSps = 0;
 };
 
 } // namespace ungula::motor::tmc2209

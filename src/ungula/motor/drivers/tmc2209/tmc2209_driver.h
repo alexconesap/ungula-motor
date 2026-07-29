@@ -115,6 +115,55 @@ class Tmc2209Driver final : public IMotorDriver {
                 return &stepSignal_;
         }
 
+        /// Retune StallGuard4 sensitivity while the driver is running.
+        ///
+        /// SGTHRS is not a fixed property of the machine: SG_RESULT
+        /// rises with velocity, so one threshold tuned at a low speed
+        /// under-triggers at a high one (the axis slams the hard stop
+        /// before DIAG asserts). Hosts that vary speed keep a
+        /// speed→sensitivity table and call this whenever the cruise
+        /// speed changes.
+        ///
+        /// Writes SGTHRS immediately (one datagram, ~1 ms) and updates
+        /// the cached config so `readStallSnapshot()` reports the new
+        /// value. Safe to call while moving. No-op returning `Ok` when
+        /// no DIAG pin is wired; returns `InvalidConfig` in SpreadCycle
+        /// (StallGuard4 needs StealthChop) and `NotInitialized` before
+        /// `begin()`.
+        Status setStallSensitivity(StallSensitivity sensitivity);
+
+        /// The sensitivity currently programmed into the chip.
+        StallSensitivity stallSensitivity() const
+        {
+                return cfg_.stallSensitivity;
+        }
+
+        /// Re-gate StallGuard on a minimum STEP rate while running (one
+        /// datagram, ~1 ms; safe while moving).
+        ///
+        /// A host that varies speed should track its CRUISE rate with this, not
+        /// pin a fixed floor. TSTEP measures the commanded pulse interval, not
+        /// rotor motion, so:
+        ///   * a real stall at cruise leaves the pulse train at cruise — TSTEP
+        ///     stays small, the gate stays open, the stall IS detected;
+        ///   * a controlled deceleration genuinely slows the pulse train, so
+        ///     TSTEP rises past the gate and detection switches off before
+        ///     `SG_RESULT` collapses toward zero and fakes a stall.
+        /// That asymmetry is the whole point of TCOOLTHRS (datasheet 14.2), and
+        /// it is why a fixed low floor does not work: it leaves detection armed
+        /// through most of every decel ramp.
+        ///
+        /// Setting a rate ABOVE the commanded cruise disables detection for that
+        /// move, which is the correct behaviour below the speed where StallGuard4
+        /// is trustworthy at all.
+        Status setStallMinStepRate(uint32_t sps);
+
+        /// The gate currently programmed, in STEP pulses/s.
+        uint32_t stallMinStepRate() const
+        {
+                return cfg_.stallMinStepRateSps;
+        }
+
         /// TMC2209 stall-debug snapshot.
         ///
         /// On the TMC2209 several stall-related registers (SGTHRS,

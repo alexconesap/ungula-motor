@@ -394,7 +394,7 @@ Status MotorAxis::clearFault()
 // Motion commands
 // =====================================================================
 
-Status MotorAxis::armMove(Direction dir, uint32_t targetSteps)
+Status MotorAxis::armMove(Direction dir, uint32_t targetSteps, StallPolicy stall)
 {
         // A home switch is a hard limit at the home end too — refuse to drive INTO
         // either a travel limit or the home sensor that guards this direction.
@@ -409,6 +409,7 @@ Status MotorAxis::armMove(Direction dir, uint32_t targetSteps)
         }
         activeDirection_ = dir;
         motionInFlight_ = true;
+        activeStallPolicy_ = stall;
         if (limits_ != nullptr) {
                 // Use wall-clock time to arm the limit-system window.
                 limits_->notifyMotionStart(ungula::core::time::millis());
@@ -418,7 +419,7 @@ Status MotorAxis::armMove(Direction dir, uint32_t targetSteps)
         return Status::Ok();
 }
 
-Status MotorAxis::armJog(Direction dir)
+Status MotorAxis::armJog(Direction dir, StallPolicy stall)
 {
         // See armMove: the home sensor blocks a jog into it the same as a travel
         // limit. (Homing never trips this — its strategy short-circuits to success
@@ -433,6 +434,7 @@ Status MotorAxis::armJog(Direction dir)
         }
         activeDirection_ = dir;
         motionInFlight_ = true;
+        activeStallPolicy_ = stall;
         if (limits_ != nullptr) {
                 limits_->notifyMotionStart(ungula::core::time::millis());
         }
@@ -448,7 +450,7 @@ Status MotorAxis::armJog(Direction dir)
         return Status::Ok();
 }
 
-Status MotorAxis::moveForward()
+Status MotorAxis::moveForward(StallPolicy stall)
 {
         // Idle is the normal arming state; Homing is allowed because a
         // homing strategy needs to arm a jog AFTER `home()` has already
@@ -458,19 +460,19 @@ Status MotorAxis::moveForward()
         if (state_ != MotorState::Idle && state_ != MotorState::Homing) {
                 return Status::Err(ErrorCode::InvalidState);
         }
-        return armJog(Direction::Forward);
+        return armJog(Direction::Forward, stall);
 }
 
-Status MotorAxis::moveBackward()
+Status MotorAxis::moveBackward(StallPolicy stall)
 {
         // See moveForward() for the Homing carve-out.
         if (state_ != MotorState::Idle && state_ != MotorState::Homing) {
                 return Status::Err(ErrorCode::InvalidState);
         }
-        return armJog(Direction::Backward);
+        return armJog(Direction::Backward, stall);
 }
 
-Status MotorAxis::moveTo(DistanceValue target)
+Status MotorAxis::moveTo(DistanceValue target, StallPolicy stall)
 {
         if (state_ != MotorState::Idle) {
                 return Status::Err(ErrorCode::InvalidState);
@@ -491,10 +493,10 @@ Status MotorAxis::moveTo(DistanceValue target)
         const Direction dir = (targetSteps > current) ? Direction::Forward : Direction::Backward;
         const uint32_t steps = static_cast<uint32_t>(
             (targetSteps > current) ? (targetSteps - current) : (current - targetSteps));
-        return armMove(dir, steps);
+        return armMove(dir, steps, stall);
 }
 
-Status MotorAxis::moveBy(DistanceValue delta)
+Status MotorAxis::moveBy(DistanceValue delta, StallPolicy stall)
 {
         if (state_ != MotorState::Idle) {
                 return Status::Err(ErrorCode::InvalidState);
@@ -511,7 +513,7 @@ Status MotorAxis::moveBy(DistanceValue delta)
         }
         const Direction dir = (deltaSteps > 0) ? Direction::Forward : Direction::Backward;
         const uint32_t steps = static_cast<uint32_t>(deltaSteps > 0 ? deltaSteps : -deltaSteps);
-        return armMove(dir, steps);
+        return armMove(dir, steps, stall);
 }
 
 Status MotorAxis::home()
@@ -614,6 +616,7 @@ Status MotorAxis::emergencyStop()
                 limits_->notifyMotionEnd();
         }
         motionInFlight_ = false;
+        activeStallPolicy_ = StallPolicy::Fault;
         lastStopReason_ = StopReason::EmergencyStop;
         lastFault_ = FaultCode::Other;
         transition(MotorState::EmergencyStopped);
@@ -742,6 +745,23 @@ void MotorAxis::pumpLimits(int64_t nowMs)
                 if (state_ == MotorState::Homing) {
                         return;
                 }
+                // The caller declared, when it armed this move, that hitting
+                // something is how the move is SUPPOSED to end (a run into a
+                // mechanical hard stop on a machine with no limit switch).
+                // Finish the motion normally: the stop reason still reports
+                // StallDetected so the host can tell "hit the end" from
+                // "ran the full distance", but the axis stays usable instead
+                // of latching a fault the host would have to clear on every
+                // single cycle.
+                if (activeStallPolicy_ == StallPolicy::AcceptAsEnd) {
+                        activeStallPolicy_ = StallPolicy::Fault;
+                        (void)driver_.stop(StopMode::Immediate);
+                        if (state_ != MotorState::Idle) {
+                                transition(MotorState::Idle);
+                        }
+                        emit(MotorEventType::MotionCompleted, StopReason::StallDetected);
+                        return;
+                }
                 lastFault_ = FaultCode::Stall;
                 if (state_ != MotorState::Faulted) {
                         transition(MotorState::Faulted);
@@ -763,6 +783,7 @@ void MotorAxis::pumpLimits(int64_t nowMs)
         if (motionInFlight_ && (travelHit || homeHit)) {
                 (void)driver_.stop(StopMode::Immediate);
                 motionInFlight_ = false;
+                activeStallPolicy_ = StallPolicy::Fault;
                 limits_->notifyMotionEnd();
                 lastStopReason_ = StopReason::TravelLimit;
                 transition(MotorState::Idle);
@@ -781,6 +802,7 @@ void MotorAxis::pumpMotion()
                 return;
         }
         motionInFlight_ = false;
+        activeStallPolicy_ = StallPolicy::Fault;
         if (limits_ != nullptr) {
                 limits_->notifyMotionEnd();
         }
