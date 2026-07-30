@@ -534,6 +534,19 @@ Status MotorAxis::home()
         return Status::Ok();
 }
 
+Status MotorAxis::declareHomeHere()
+{
+        if (isMotionInFlight()) {
+                return Status::Err(ErrorCode::MotionInProgress);
+        }
+        const Status st = driver_.resetPosition(0);
+        if (!st.ok()) {
+                return st;
+        }
+        homed_ = true;
+        return Status::Ok();
+}
+
 Status MotorAxis::stop()
 {
         if (state_ == MotorState::Idle || state_ == MotorState::Disabled) {

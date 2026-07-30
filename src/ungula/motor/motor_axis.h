@@ -82,6 +82,17 @@ class MotorAxis final {
         Status moveTo(DistanceValue target, StallPolicy stall = StallPolicy::Fault);
         Status moveBy(DistanceValue delta, StallPolicy stall = StallPolicy::Fault);
         Status home();
+
+        /// Declare the CURRENT position to be the home reference, without moving.
+        ///
+        /// Same post-condition as a successful home() — position zeroed, isHomed()
+        /// true — for the cases where the carriage is already known to be sitting
+        /// on its reference: a jog that ran deliberately into the backward hard
+        /// stop, or an operator calibrating by eye. Refuses while motion is in
+        /// flight, because zeroing under a running profile would leave the target
+        /// and the position describing different places.
+        Status declareHomeHere();
+
         Status stop();
         /// Decelerate the in-flight motion to a controlled stop, meant for
         /// cancelling a jog without the hard-stop clunk. Stops in a QUARTER of the
