@@ -1,8 +1,9 @@
 # `lib_motor` API reference
 
-Public surface of UngulaMotor 1.10.0. For an introductory overview and
-copy-pastable examples, read `README.md` first; this file is the
-reference you reach for when you already know what you're building.
+Public surface of UngulaMotor 1.10.0. Headers, types, signatures,
+lifecycle and per-driver constraints are all here, so an agent can wire
+an axis from this file alone — no need to read `README.md` or the
+sources. `README.md` is the human-facing version of the same ground.
 
 Every declaration shown here lives in `namespace ungula::motor` unless
 explicitly nested further. Concrete drivers live in

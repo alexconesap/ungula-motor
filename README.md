@@ -727,7 +727,7 @@ not in the host build - both need hardware-in-the-loop coverage.
 
 ## License
 
-MIT — Copyright (c) 2025-2026 Alex Conesa
+MIT — Copyright (c) 2025-2026 Alex Conesa. See the [LICENSE](LICENSE) file.
 
 ---
 
