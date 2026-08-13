@@ -23,14 +23,16 @@ Five rules the library doesn't break:
 
 1. **One public class.** `MotorAxis` exposes the verbs an operator
    would say out loud: `moveForward`, `moveBackward`, `moveTo`,
-   `moveBy`, `home`, `stop`, `emergencyStop`, plus `setSpeed`,
-   `setProfile`, `setIntent`. ~25 methods total.
+   `moveBy`, `home`, `declareHomeHere`, `stop`, `softStop`,
+   `emergencyStop`, plus `setSpeed`, `setAcceleration`, `setProfile`,
+   `setIntent`. ~25 methods total.
 2. **One internal unit.** Everything inside the lib (planner, ISR,
    pulse engine) works in steps-per-second (SPS). The public API
    takes strong-typed `Speed` / `Distance` / `Acceleration` values
-   (RPM, mm/s, cm/s, deg/s, steps/s for speed; mm, cm, degrees,
-   revolutions, steps for distance) and converts at the axis
-   boundary using per-axis `MotorUnits`.
+   (RPM, mm/s, cm/s, cm/min, deg/s, steps/s for speed; mm, cm, um,
+   degrees, revolutions, steps for distance) and converts at the axis
+   boundary using per-axis `MotorUnits`. All three take **integer**
+   arguments - write `mm(50)`, not `mm(50.0f)`.
 3. **Behaviour intents, not chip flags.** Composable
    `MotorIntent::Quiet | HighTorque | Cool | AdaptiveCurrent |
    Precision | EnergySaving` bits route to whatever each driver
@@ -39,7 +41,7 @@ Five rules the library doesn't break:
    wiring); YPMC and CAN-servo drivers map the same intents to whatever
    their hardware offers.
 4. **One file per driver.** Writing a new chip driver is implementing
-   `IMotorDriver` (15 methods) in `drivers/<chip>/<chip>_driver.{h,cpp}`,
+   `IMotorDriver` (16 methods) in `drivers/<chip>/<chip>_driver.{h,cpp}`,
    shipping a private `<chip>_config.h`. No configurator + stallguard +
    coolstep + kit + identity-provider zoo.
 5. **Host-driven service, no heap after begin.** The lib spawns no
@@ -140,8 +142,8 @@ MotorAxisConfig axisCfg;
 axisCfg.id   = MotorAxisId{ 0 };
 axisCfg.units.stepsPerRevolution = 3200;  // 1.8 deg motor at 16x
 axisCfg.units.stepsPerMm = 80.0f;          // 20-tooth GT2 pulley
-axisCfg.limits.maxSpeed = Speed::rpm(1500.0f);
-axisCfg.limits.accel    = Acceleration::rpmPerSec(6000.0f);
+axisCfg.limits.maxSpeed = Speed::rpm(1500);
+axisCfg.limits.accel    = Acceleration::rpmPerSec(6000);
 axisCfg.limits.decel    = axisCfg.limits.accel;
 
 MotorAxis motor(axisCfg, driver);
@@ -152,7 +154,7 @@ void setup()
     motor.begin();
     motor.enable();
     motor.setIntent(MotorIntent::Quiet | MotorIntent::AdaptiveCurrent);
-    motor.moveBy(DistanceValue::mm(50.0f));
+    motor.moveBy(DistanceValue::mm(50));
 }
 
 void loop() { motor.service(tc::millis()); }
@@ -208,8 +210,8 @@ tmc::Tmc2209Driver driver(chip, tmcBus);
 MotorAxisConfig cfg;
 cfg.id = MotorAxisId{ 0 };
 cfg.units.stepsPerRevolution = 3200;
-cfg.limits.maxSpeed = Speed::rpm(60.0f);
-cfg.limits.accel = Acceleration::rpmPerSec(120.0f);
+cfg.limits.maxSpeed = Speed::rpm(60);
+cfg.limits.accel = Acceleration::rpmPerSec(120);
 cfg.limits.decel = cfg.limits.accel;
 
 LimitSystem limits;
@@ -304,8 +306,8 @@ stepdir::GenericStepDirDriver driver(dm);
 MotorAxisConfig axisCfg;
 axisCfg.id   = MotorAxisId{ 0 };
 axisCfg.units.stepsPerRevolution = 1600;     // DM542 at 8x microsteps
-axisCfg.limits.maxSpeed = Speed::rpm(600.0f);
-axisCfg.limits.accel    = Acceleration::rpmPerSec(2400.0f);
+axisCfg.limits.maxSpeed = Speed::rpm(600);
+axisCfg.limits.accel    = Acceleration::rpmPerSec(2400);
 axisCfg.limits.decel    = axisCfg.limits.accel;
 
 MotorAxis motor(axisCfg, driver);
@@ -345,8 +347,8 @@ ypmc::YpmcStepDirDriver driver(cfg);
 
 MotorAxisConfig axisCfg;
 axisCfg.units.stepsPerRevolution = 10'000;   // S2SVD15 factory e-gear
-axisCfg.limits.maxSpeed = Speed::rpm(150.0f);
-axisCfg.limits.accel    = Acceleration::rpmPerSec(600.0f);
+axisCfg.limits.maxSpeed = Speed::rpm(150);
+axisCfg.limits.accel    = Acceleration::rpmPerSec(600);
 axisCfg.limits.decel    = axisCfg.limits.accel;
 
 MotorAxis motor(axisCfg, driver);
@@ -397,8 +399,8 @@ ypmc::YpmcStepDirDriver driver(cfg);
 
 MotorAxisConfig axisCfg;
 axisCfg.units.stepsPerRevolution = 10'000;
-axisCfg.limits.maxSpeed = Speed::rpm(2500.0f);
-axisCfg.limits.accel    = Acceleration::rpmPerSec(5000.0f);
+axisCfg.limits.maxSpeed = Speed::rpm(2500);
+axisCfg.limits.accel    = Acceleration::rpmPerSec(5000);
 axisCfg.limits.decel    = axisCfg.limits.accel;
 axisCfg.limits.hardStepRateCeilingSps = 1'000'000;  // > 2500 RPM * 10000 PPR
 
@@ -471,7 +473,7 @@ rmd::RmdCanDriver driver(cfg, can);   // takes lib_hal::can::ICan&
 
 MotorAxisConfig axisCfg;
 axisCfg.units.stepsPerRevolution = cfg.stepsPerRevolution;
-axisCfg.limits.maxSpeed = Speed::rpm(300.0f);
+axisCfg.limits.maxSpeed = Speed::rpm(300);
 
 MotorAxis motor(axisCfg, driver);
 
@@ -520,6 +522,26 @@ d.begin();                  // identity populated from IOIN here
 auto id = d.identity();     // { "Trinamic", "TMC2209", 0x21, 0, 0x2100...0 }
 ```
 
+## Stopping an axis
+
+Three verbs, three different things:
+
+| Verb | What the motor does | When to use it |
+| --- | --- | --- |
+| `stop()` | Asks the driver for a decel ramp; both shipped step generators answer `Unsupported`, so on STEP/DIR drives it lands as a hard halt | normal "cancel this move" |
+| `softStop()` | Splices a real rampdown onto the in-flight move (`4 x` the accel rate, i.e. a stop in a quarter of the accel ramp time) | cancelling a jog without the clunk |
+| `emergencyStop()` | Immediate halt, latches `EmergencyStopped`, needs `clearFault()` to recover | operator / safety event only |
+
+All three abort an active homing strategy. `stop()` and `softStop()` are
+no-ops returning `Ok()` from `Idle` / `Disabled`, and `InvalidState` from
+`Faulted` / `EmergencyStopped`. The axis passes through `Stopping` and
+reaches `Idle` on a later `service()` tick, not synchronously.
+
+There is no separate `setDeceleration()`. `setAcceleration()` and
+`setProfile()` write the same rate into both the accel and decel knobs, so
+an asymmetric deceleration can only be set once through
+`cfg.limits.decel` - and it is lost the first time either setter runs.
+
 ## Position tracking
 
 Open-loop "commanded position" only: the lib does not pull encoder
@@ -547,9 +569,13 @@ sensors that can halt motion. Four kinds:
 - `TravelLimit` -- end-of-travel switch, direction-tagged. Halts
   motion only when moving in the matched direction; lets the host
   back away in the opposite direction.
-- `HomeSensor` -- read by the homing strategy; not a motion-halt
-  input. If the host system does not implement a 'homing' operation, use
-  a plain `TravelLimit` instead.
+- `HomeSensor` -- the homing reference, and a hard limit for everything
+  else. During `MotorState::Homing` only the homing strategy reacts to
+  it. Outside homing it behaves like a `TravelLimit` on the home side:
+  `moveForward` / `moveBackward` / `moveTo` / `moveBy` refuse to drive
+  into it (`ErrorCode::LimitActive`), and a motion that runs onto it is
+  halted with `StopReason::TravelLimit`. If the host never homes, wire a
+  plain `TravelLimit` instead.
 - `StallSensor` -- mid-motion stall detection (typically the
   TMC2209's DIAG pin), debounced + windowed by `stallArmDelayMs` and
   `stallHitsToTrigger`.
@@ -644,7 +670,7 @@ src/ungula/motor/
   driver_identity.h              # DriverIdentity
   result.h                       # Result<T> / Status / ErrorCode
 
-  i_motor_driver.h               # the driver contract (15 methods)
+  i_motor_driver.h               # the driver contract (16 methods)
   i_device_transport.h           # UART / SPI byte-pipe abstraction
   i_step_signal_generator.h      # STEP / DIR pulse generator contract
   i_motion_planner.h             # trajectory planner contract
@@ -674,13 +700,17 @@ tests/
   test_tmc2209_driver.cpp          # TMC2209 driver against fakes
   test_stepdir_drivers.cpp         # generic + YPMC driver tests
   test_rmd_can_driver.cpp          # RMD-over-CAN driver tests
+  test_limit_system.cpp            # debounce / edge-latch state machine
+  test_step_symbol_plan.cpp        # RMT symbol expansion (pure math)
   fakes/                           # FakeMotorDriver + FakeLimitSystem +
                                    # FakeStepSignal + FakeTmcTransport
                                    # (RMD tests use lib_canbus's FakeCan)
 ```
 
-101 host tests, all passing. Tests are platform-agnostic (no ESP-IDF
+118 host tests, all passing. Tests are platform-agnostic (no ESP-IDF
 build needed) and run from `tests/build/` after `cmake --build .`.
+`gptimer_step_signal.cpp` and `rmt_step_signal.cpp`'s ESP-IDF path are
+not in the host build - both need hardware-in-the-loop coverage.
 
 ## See also
 
